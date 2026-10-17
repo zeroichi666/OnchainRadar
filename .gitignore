@@ -11,3 +11,14 @@ test-results
 .DS_Store
 *.log
 .onchain-radar-worker.lock
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.tsbuildinfo
+# Local credentials and cookie exports must stay outside source control.
+.agent-reach/
+cookies.txt
+cookies.json
+*.pem
+*.key

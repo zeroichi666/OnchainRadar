@@ -6,6 +6,7 @@ import {
 } from "@/lib/domain";
 import { getDemoDashboard } from "@/lib/demo";
 import { normalizeCtoCandidate, normalizeGtdOpportunity, normalizeNarrative, normalizeNftOpportunity } from "@/lib/classification";
+import { buildSocialReviewQueue } from "@/lib/social-review";
 import { consolidateSecurityReports, defaultSettings, evaluateSecurityGate, isSecurityReportStale } from "@/lib/security";
 import type { RadarClientSettings } from "@/lib/settings";
 import { enrichCandidateBatch } from "@/lib/server/dexscreener";
@@ -43,7 +44,7 @@ export async function getDashboardPayload(clientSettings?: RadarClientSettings):
   const warnings: string[] = [];
   const empty = {
     mode: "live" as const, generatedAt: nowIso(), lastSuccessfulSocialSyncAt: null, warnings,
-    nfts: [], gtd: [], tokens: [], ctoClaims: [], securityQueue: [], securityReports: [], providerReports: [], narratives: [], recentExclusions: [],
+    nfts: [], gtd: [], tokens: [], ctoClaims: [], securityQueue: [], securityReports: [], providerReports: [], narratives: [], socialReviewQueue: [], recentExclusions: [],
   };
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -63,8 +64,10 @@ export async function getDashboardPayload(clientSettings?: RadarClientSettings):
       readPayloadTable("radar_nfts", 200), readPayloadTable("radar_gtd", 200), readPayloadTable("radar_candidates", 100),
       readPayloadTable("radar_narratives", 100), readSecurityReports(500), readLastSuccessfulSync("agent-reach"),
     ]);
-  } catch (error) {
-    warnings.push(error instanceof Error ? error.message : "Supabase data could not be read.");
+  } catch {
+    // A failed read is not an empty dataset. Let APIs return a retryable failure
+    // so refreshing clients can keep their last successful snapshot.
+    throw new Error("Supabase dashboard data could not be read.");
   }
   if (!process.env.INGESTION_SECRET) warnings.push("INGESTION_SECRET is not configured; the worker cannot submit protected live data.");
   if (!lastSuccessfulSocialSyncAt) warnings.push("No successful Agent-Reach/X synchronization has been recorded yet.");
@@ -145,7 +148,7 @@ export async function getDashboardPayload(clientSettings?: RadarClientSettings):
   }
   return DashboardPayloadSchema.parse({
     mode: "live", generatedAt: nowIso(), lastSuccessfulSocialSyncAt, warnings,
-    nfts, gtd, tokens, ctoClaims, securityQueue, securityReports, providerReports, narratives,
+    nfts, gtd, tokens, ctoClaims, securityQueue, securityReports, providerReports, narratives, socialReviewQueue: buildSocialReviewQueue(narratives),
     recentExclusions: recentExclusions.slice(0, 20),
   });
 }

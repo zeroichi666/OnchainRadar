@@ -39,6 +39,7 @@ export function getDemoDashboard(): DashboardPayload {
       uniqueAuthors: null, engagement: null, growthPct: null, accelerationScore: null, securityPassRatio: null,
       sourcePosts: [], lastUpdatedAt: now, demo: true,
     }],
+    socialReviewQueue: [],
     recentExclusions: [],
   };
 }

@@ -6,7 +6,7 @@ All routes are Next.js server routes. Read responses are `no-store`, sanitized, 
 
 | Route | Purpose |
 |---|---|
-| `GET /api/dashboard` | Complete dashboard payload. Optional `settings=<URL-encoded JSON>` accepts the validated `RadarClientSettings` shape; it cannot turn off mandatory security checks. |
+| `GET /api/dashboard` | Complete dashboard payload. Optional `settings=<URL-encoded JSON>` accepts the validated `RadarClientSettings` shape; it cannot turn off mandatory security checks. Optional `socialDate=today` or `socialDate=YYYY-MM-DD` filters only the detected social claim queue by post publication date in `Asia/Jakarta` (WIB), not the mint schedule. Omit it for all stored history. |
 | `GET /api/health` | Mode, provider adapter/configuration status, and recent worker-sync status. `adapter-ready` does not mean a live upstream ping succeeded. |
 | `GET /api/sync/status` | Agent-Reach/X last successful sync, age, and six-hour freshness indicator. |
 | `GET /api/tokens` | Approved token feed with `chain`, `q`, `minMarketCap`, `security=PASS|WARNING`, `sort=score|name|marketCap|liquidity|change`, `period=1h|24h`, `page`, `pageSize`, and optional validated `settings`. |
@@ -18,6 +18,8 @@ All routes are Next.js server routes. Read responses are `no-store`, sanitized, 
 | `GET /api/security/review` | Pending/incomplete/conflicting candidate queue, security exclusions, merged reports and provider-specific reports. |
 
 Read routes return JSON and use HTTP 400 for invalid filters, 404 for unknown/non-cleared token detail, 429 for rate limiting, and a generic server error if data cannot be loaded.
+
+The dashboard date-filter response exposes `X-Social-Date` and `X-Social-Time-Zone` headers. This is a read-time view only: historical posts remain stored, and the normal dashboard UI can switch between a chosen WIB date and all history. Live worker searches default to today's WIB date and enforce exact post timestamps after X's date-only source query filtering.
 
 ## Protected ingestion
 

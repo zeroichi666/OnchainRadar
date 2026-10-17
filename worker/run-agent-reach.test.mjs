@@ -2,7 +2,7 @@ import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -29,6 +29,27 @@ function runRunner(env) {
 }
 
 describe("scheduled adapter runner", () => {
+  it("forwards shutdown to the adapter and always removes the lock", async () => {
+    const dir = await mkdtemp(resolve(tmpdir(), "radar-worker-shutdown-test-"));
+    tempDirs.push(dir);
+    const lockPath = resolve(dir, "runner.lock");
+    const pidPath = resolve(dir, "adapter.pid");
+    const source = `require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(() => {}, 1000);`;
+    const child = spawn(process.execPath, [resolve("worker/run-agent-reach.mjs")], {
+      cwd: process.cwd(), env: { PATH: process.env.PATH, HOME: process.env.HOME, INGESTION_URL: "http://127.0.0.1:1", INGESTION_SECRET: "test", AGENT_REACH_ADAPTER: process.execPath, AGENT_REACH_ADAPTER_ARGS_JSON: JSON.stringify(["-e", source]), WORKER_LOCK_FILE: lockPath }, stdio: ["ignore", "pipe", "pipe"]
+    });
+    await new Promise((resolvePromise, reject) => {
+      const poll = async () => { try { await access(pidPath); resolvePromise(); } catch { setTimeout(poll, 10); } };
+      child.once("error", reject); poll();
+    });
+    child.kill("SIGTERM");
+    const code = await new Promise((resolvePromise) => child.once("close", resolvePromise));
+    assert.notEqual(code, 0);
+    await assert.rejects(access(lockPath));
+    const adapterPid = Number(await readFile(pidPath, "utf8"));
+    assert.throws(() => process.kill(adapterPid, 0), /ESRCH/);
+  });
+
   it("sends the normalized envelope while withholding ingestion and Supabase secrets from the adapter", async () => {
     const dir = await mkdtemp(resolve(tmpdir(), "radar-worker-test-")); tempDirs.push(dir);
     let received;

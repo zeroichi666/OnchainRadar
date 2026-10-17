@@ -1,9 +1,12 @@
 import "server-only";
-import { createHash } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { NarrativeSchema, TokenCandidateSchema } from "@/lib/domain";
 import type { GtdOpportunity, Narrative, NftOpportunity, SecurityReport, SocialPost, TokenCandidate } from "@/lib/domain";
 import { normalizeCtoCandidate, normalizeGtdOpportunity, normalizeNarrative, normalizeNftOpportunity } from "@/lib/classification";
 import type { IngestionEnvelope } from "@/lib/server/ingest-schema";
+import { normalizeDatabaseTimestamp } from "@/lib/server/timestamps";
+import { buildSocialPostRows, mergeNarrativeHistory, mergeTokenCandidateHistory } from "@/lib/server/social-persistence";
+import { mergeSocialPosts } from "@/lib/social-review";
 
 let client: SupabaseClient | null | undefined;
 export function getSupabaseServerClient(): SupabaseClient | null {
@@ -47,7 +50,7 @@ export async function readLastSuccessfulSync(source: string): Promise<string | n
   const { data, error } = await supabase.from("radar_sync_state").select("last_successful_at").eq("source", source).maybeSingle();
   if (error) throw new Error(`Supabase sync-state read failed: ${error.message}`);
   const value = (data as { last_successful_at?: string | null } | null)?.last_successful_at;
-  return value ?? null;
+  return normalizeDatabaseTimestamp(value);
 }
 
 export async function upsertCandidate(row: { id: string; chain: string; token_address?: string | null; payload: TokenCandidate }): Promise<void> {
@@ -81,18 +84,13 @@ function postKey(post: SocialPost): string {
   return post.externalId ? `x:${post.externalId}` : post.sourceUrl ? `url:${post.sourceUrl}` : `text:${(post.author ?? "").toLowerCase()}|${post.publishedAt ?? ""}|${post.text.trim().replace(/\s+/g, " ").toLowerCase()}`;
 }
 function dedupePosts<T extends { sourcePosts: SocialPost[] }>(record: T): T {
-  const seen = new Set<string>();
-  return { ...record, sourcePosts: record.sourcePosts.filter((post) => { const key = postKey(post); if (seen.has(key)) return false; seen.add(key); return true; }) };
-}
-function socialPostRows(posts: SocialPost[], fetchedAt: string): Record<string, unknown>[] {
   const unique = new Map<string, SocialPost>();
-  for (const post of posts) unique.set(postKey(post), post);
-  return [...unique.entries()].map(([key, post]) => ({
-    id: createHash("sha256").update(key).digest("hex"), platform: "x", external_post_id: post.externalId ?? null,
-    author: post.author ?? null, text: post.text, url: post.sourceUrl ?? null, published_at: post.publishedAt ?? null,
-    engagement_metrics: { ...(post.likes == null ? {} : { likes: post.likes }), ...(post.reposts == null ? {} : { reposts: post.reposts }), ...(post.replies == null ? {} : { replies: post.replies }) },
-    extracted_entities: {}, fetched_at: fetchedAt,
-  }));
+  for (const post of record.sourcePosts) {
+    const key = postKey(post);
+    const existing = unique.get(key);
+    unique.set(key, existing ? mergeSocialPosts(existing, post) : post);
+  }
+  return { ...record, sourcePosts: [...unique.values()] };
 }
 function sourceUrls(posts: SocialPost[]): string[] { return [...new Set(posts.map((post) => post.sourceUrl).filter((url): url is string => Boolean(url)))]; }
 
@@ -105,15 +103,46 @@ export async function persistIngestion(envelope: IngestionEnvelope): Promise<{ a
 
   const nfts: NftOpportunity[] = envelope.nfts.map((row) => normalizeNftOpportunity(dedupePosts({ ...row, contractVerified: null, securityStatus: "pending", lastVerifiedAt: undefined })));
   const gtd: GtdOpportunity[] = envelope.gtd.map((row) => normalizeGtdOpportunity(dedupePosts(row)));
-  const tokens: TokenCandidate[] = envelope.tokens.map((row) => normalizeCtoCandidate(dedupePosts({ ...row, metrics: {} })));
-  const narratives: Narrative[] = envelope.narratives.map((row) => normalizeNarrative(dedupePosts(row)));
+  let tokens: TokenCandidate[] = envelope.tokens.map((row) => normalizeCtoCandidate(dedupePosts({ ...row, metrics: {} })));
+  const candidateId = (row: TokenCandidate) => row.address ? `${row.chain}:${row.address.toLowerCase()}` : row.id;
+  if (tokens.length) {
+    const { data: storedRows, error: candidateReadError } = await supabase.from("radar_candidates").select("id,payload").in("id", tokens.map(candidateId));
+    if (candidateReadError) throw new Error(`Supabase candidate history read failed: ${candidateReadError.message}`);
+    const storedById = new Map<string, TokenCandidate>();
+    for (const row of storedRows ?? []) {
+      const parsed = TokenCandidateSchema.safeParse(row.payload);
+      if (parsed.success) storedById.set(String(row.id), parsed.data);
+    }
+    tokens = tokens.map((incoming) => {
+      const existing = storedById.get(candidateId(incoming));
+      return existing ? mergeTokenCandidateHistory(existing, incoming) : incoming;
+    });
+  }
+  let narratives: Narrative[] = envelope.narratives.map((row) => normalizeNarrative(dedupePosts(row)));
+  if (narratives.length) {
+    const { data: storedRows, error: narrativeReadError } = await supabase
+      .from("radar_narratives")
+      .select("id,payload")
+      .in("id", narratives.map((row) => row.id));
+    if (narrativeReadError) throw new Error(`Supabase narrative history read failed: ${narrativeReadError.message}`);
+    const storedById = new Map<string, Narrative>();
+    for (const row of storedRows ?? []) {
+      const parsed = NarrativeSchema.safeParse(row.payload);
+      if (parsed.success) storedById.set(String(row.id), parsed.data);
+    }
+    narratives = narratives.map((incoming) => {
+      const existing = storedById.get(incoming.id);
+      return existing ? mergeNarrativeHistory(existing, incoming) : incoming;
+    });
+  }
   const updatedAt = new Date().toISOString();
   const nftRows = nfts.map((payload) => ({ id: payload.id, collection_name: payload.name, chain: payload.chain, collection_address: payload.contractAddress ?? null, mint_address: payload.mintContractAddress ?? null, mint_type: payload.kind, mint_price_usd: payload.mintPriceUsd ?? null, mint_start: payload.mintAt ?? null, mint_end: payload.mintEndsAt ?? null, eligibility: payload.eligibility ?? null, verification_status: payload.securityStatus, source_urls: sourceUrls(payload.sourcePosts), security_status: payload.securityStatus, payload, updated_at: updatedAt }));
   const gtdRows = gtd.map((payload) => ({ id: payload.id, project_name: payload.name, chain: payload.chain, mint_at: payload.mintAt ?? null, status: payload.status, mint_price_usd: payload.mintPriceUsd ?? null, allocation: payload.allocation ?? null, eligibility: payload.eligibility ?? null, source_urls: [...new Set([...sourceUrls(payload.sourcePosts), ...(payload.officialEvidenceUrl ? [payload.officialEvidenceUrl] : [])])], payload, updated_at: updatedAt }));
   const candidateRows = tokens.map((payload) => ({ id: payload.address ? `${payload.chain}:${payload.address.toLowerCase()}` : payload.id, chain: payload.chain, token_address: payload.address?.toLowerCase() ?? null, name: payload.name, symbol: payload.symbol, market_metrics: payload.metrics, payload, created_at: payload.discoveredAt, updated_at: updatedAt }));
   const narrativeRows = narratives.map((payload) => ({ id: payload.id, name: payload.category, keywords: payload.keywords ?? [], mention_metrics: { mentionCount: payload.mentionCount, uniqueAuthors: payload.uniqueAuthors, engagement: payload.engagement, growthPct: payload.growthPct, contractMentionCount: payload.contractMentionCount, discoveredTokenCount: payload.discoveredTokenCount, independentSupportingAccounts: payload.independentSupportingAccounts, securityPassRatio: payload.securityPassRatio, timeSeries: payload.timeSeries ?? [] }, momentum_score: payload.accelerationScore, first_seen_at: payload.sourcePosts.map((post) => post.publishedAt).filter(Boolean).sort()[0] ?? payload.lastUpdatedAt, updated_at: updatedAt, payload }));
-  const allPosts = [...nfts.flatMap((row) => row.sourcePosts), ...gtd.flatMap((row) => row.sourcePosts), ...tokens.flatMap((row) => row.sourcePosts), ...narratives.flatMap((row) => row.sourcePosts)];
-  const posts = socialPostRows(allPosts, updatedAt);
+  const incomingPostKeys = new Set([...envelope.nfts, ...envelope.gtd, ...envelope.tokens, ...envelope.narratives].flatMap((row) => row.sourcePosts).map(postKey));
+  const allPosts = [...nfts.flatMap((row) => row.sourcePosts), ...gtd.flatMap((row) => row.sourcePosts), ...tokens.flatMap((row) => row.sourcePosts), ...narratives.flatMap((row) => row.sourcePosts)].filter((post) => incomingPostKeys.has(postKey(post)));
+  const posts = buildSocialPostRows(allPosts, updatedAt);
   const ctoRows = tokens.filter((token) => token.ctoStatus !== "none").map((token) => ({ id: token.address ? `${token.chain}:${token.address.toLowerCase()}` : token.id, chain: token.chain, token_address: token.address?.toLowerCase() ?? null, classification: token.ctoStatus, confidence: token.ctoConfidence ?? null, evidence_urls: sourceUrls(token.sourcePosts), evidence_summary: token.ctoEvidence ?? null, assessed_at: updatedAt, evidence: { evidenceAccountCount: token.ctoEvidenceAccountCount ?? null, originalTeamAbandoned: token.originalTeamAbandoned ?? null, originalAccountStatement: token.originalAccountStatement ?? null, communityAccount: token.communityAccount ?? null, contradicted: token.ctoContradicted ?? null, impersonationRisk: token.impersonationRisk ?? null } }));
   const batches: Array<{ table: string; rows: Record<string, unknown>[] }> = [
     { table: "radar_nfts", rows: nftRows }, { table: "radar_gtd", rows: gtdRows }, { table: "radar_candidates", rows: candidateRows },

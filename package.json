@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:worker": "node --test worker/*.test.mjs"
+    "test:worker": "node --test worker/*.test.mjs",
+    "worker": "node worker/scheduler.mjs"
   },
   "dependencies": {
     "@netlify/plugin-nextjs": "^5.16.2",

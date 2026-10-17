@@ -184,6 +184,24 @@ export const SecurityReviewItemSchema = z.object({
 }).strict();
 export type SecurityReviewItem = z.infer<typeof SecurityReviewItemSchema>;
 
+export const SocialClaimReviewSchema = z.object({
+  id: z.string().min(1),
+  groupingKeys: z.array(z.string().min(1)).min(1),
+  label: z.string().min(1),
+  status: z.literal("detected"),
+  sourceStatus: z.enum(["available", "partial", "missing"]),
+  originCategories: z.array(z.string().min(1)).min(1),
+  originQueries: z.array(z.string()).default([]),
+  syncedAt: z.string().datetime(),
+  claimSignals: z.array(z.enum(["free-mint-wording", "gtd-wording", "fcfs-wording", "giveaway-wording", "meme-token-mentioned", "public-meme-call-wording", "cto-wording"])).min(1),
+  candidateAreas: z.array(z.enum(["free-mint", "gtd-mint", "cto", "meme-coin"])).min(1),
+  tickers: z.array(z.string().min(1)).default([]),
+  contractAddresses: z.array(z.string().min(1)).default([]),
+  chainClaims: z.array(z.string().min(1)).default([]),
+  sourcePosts: z.array(SocialPostSchema).min(1),
+}).strict();
+export type SocialClaimReview = z.infer<typeof SocialClaimReviewSchema>;
+
 export const DashboardPayloadSchema = z.object({
   mode: z.enum(["demo", "live"]),
   generatedAt: z.string().datetime(),
@@ -197,6 +215,7 @@ export const DashboardPayloadSchema = z.object({
   securityReports: z.array(SecurityReportSchema),
   providerReports: z.array(SecurityReportSchema).default([]),
   narratives: z.array(NarrativeSchema),
+  socialReviewQueue: z.array(SocialClaimReviewSchema).default([]),
   recentExclusions: z.array(z.object({ label: z.string(), reason: z.string(), at: z.string().datetime() })),
 }).strict();
 export type DashboardPayload = z.infer<typeof DashboardPayloadSchema>;

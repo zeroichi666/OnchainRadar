@@ -1,81 +1,114 @@
 # Onchain Radar
 
-Onchain Radar is a security-first Web3 discovery dashboard for NFT mints, GTD allocations, meme-token candidates, community takeovers, and X narratives. It is a Next.js/TypeScript application with a server-only provider layer, Supabase persistence, Zod validation, and a separate scheduled social-ingestion worker. Netlify serves the dashboard/API; it does not run the Agent-Reach CLI.
+Onchain Radar adalah dashboard discovery Web3 yang berfokus pada keamanan untuk NFT mint, GTD allocation, kandidat meme coin, community takeover, dan narasi X. Aplikasi ini memakai Next.js/TypeScript, provider server-only, Supabase, validasi Zod, serta worker sosial terjadwal yang berjalan terpisah.
 
-## Start locally
+> README ini adalah panduan utama. Jangan pernah memasukkan cookie X, key Supabase, token, atau nilai `.env.local` ke Git.
 
-Requirements: Node.js 20.9+ and npm. From this directory:
+## Requirement
+
+- Node.js **20.9+** dan npm; gunakan Node LTS yang masih didukung, misalnya 22/24.
+- Dependensi Node dipasang dengan `npm ci` dari `package-lock.json`: Next.js, React, TypeScript, Supabase SDK, Zod, library chain/UI, Vitest, dan Playwright. Tidak ada dependensi Python aplikasi yang dideklarasikan di repository.
+- Untuk pengumpulan X live: Python 3, upstream `twitter-cli` dengan executable `twitter`, dan dua cookie X yang valid. Shim Python tersedia di `worker/twitter-cli-compat/sitecustomize.py`.
+- Agent-Reach adalah tool pendamping installer/router/doctor, **bukan dependensi npm**. Runtime adapter memanggil `twitter` secara langsung; Agent-Reach tidak wajib untuk menjalankan dashboard demo. Ikuti petunjuk upstream untuk instalasinya dan verifikasi interface CLI di [`worker/README.md`](worker/README.md).
+- Untuk live storage: project Supabase dengan schema/migrasi yang sudah diterapkan. Untuk tes browser: Chromium Playwright atau executable browser yang kompatibel.
+
+## Mulai lokal (demo)
 
 ```bash
-npm install
+npm ci
 cp .env.example .env.local
 npm run dev
 ```
 
-The default is `DATA_MODE=demo`. Demo records are visibly labeled fictional placeholders, with no fake token addresses, social URLs, or market metrics. Live mode never falls back to sample data. Open `http://localhost:3000`.
+Buka `http://localhost:3000`. Default `DATA_MODE=demo`; record demo diberi label fiksi dan tidak memakai alamat token, URL sosial, atau metrik pasar palsu. Mode live tidak fallback ke data demo. `.env.local` dibaca server-side oleh Next.js. Jangan menampilkan, menyalin, atau commit file tersebut.
 
-## Implemented modules
-
-- **Overview:** summary cards, sync/provider status, recent exclusions, and discovery sections.
-- **Free Mint / GTD Mint:** separate tables with chain, type, status, schedule, eligibility, verification and source filters. A social post alone cannot establish a free mint or guaranteed allocation.
-- **Meme Coins:** search, chain/security filters, sortable and paginated feed. A token must have a valid address, fresh chain-appropriate mandatory checks, sufficient liquidity and market-cap ratio, and must pass enabled screening filters before it is ranked. Unknown, stale, conflicting, or failing results remain outside the feed.
-- **Community Takeover:** confirmed/probable CTOs appear only after security clearance; unresolved claims remain separately labeled.
-- **X Narratives:** stored metrics/time series and source posts only; unavailable historical data is not fabricated.
-- **Security Review:** pending/incomplete candidates, raw per-provider reports, and recent exclusions.
-- **Watchlist / Settings:** local-device watchlist and configurable screening thresholds/toggles. Mandatory security checks cannot be disabled.
-- **Token details:** chain explorer/pair links, available market and security metrics, provider-supplied chart series, narrative links, CTO evidence, and source posts.
-
-## Architecture
+## Arsitektur
 
 ```text
-Agent-Reach-capable worker / documented adapter
-        -> POST /api/ingest/social (Bearer secret, strict schema, rate/body limits)
-        -> Supabase PostgreSQL (RLS, no anonymous policies, idempotent batches)
-        -> Next.js server routes (sanitized read APIs, market/security refresh)
-        -> responsive dashboard
+worker Agent-Reach/twitter-cli
+  -> POST /api/ingest/social (Bearer + schema/rate/body limit)
+  -> Supabase PostgreSQL (RLS, idempotent batch)
+  -> Next.js server routes/provider refresh
+  -> dashboard
 ```
 
-Market data is fetched server-side through the documented DEX Screener pair-token endpoint. EVM security uses the GoPlus adapter; Solana security uses chain-specific RPC checks and intentionally returns incomplete/unknown when unsupported Token-2022 or holder/liquidity checks cannot be established. Provider results are cached by chain/address and rechecked using `SECURITY_TTL_SECONDS`.
+Netlify hanya menjalankan dashboard/API Next.js; Netlify **tidak** menjalankan Agent-Reach CLI atau scheduler worker. Market data diambil server-side dari DEX Screener; pemeriksaan EVM memakai GoPlus dan Solana memakai RPC chain-specific. Hasil provider yang tidak diketahui, stale, konflik, atau gagal tidak masuk feed utama.
 
-See [`docs/API.md`](docs/API.md), [`docs/research-notes.md`](docs/research-notes.md), [`supabase/schema.sql`](supabase/schema.sql), and [`worker/README.md`](worker/README.md).
+## Environment dan penempatan key
 
-## Configure live mode
+Salin `.env.example` ke `.env.local` untuk Next.js lokal. Di Netlify, masukkan variabel melalui Site settings/environment variables, bukan source control. Semua variabel berikut server-only: jangan beri prefix `NEXT_PUBLIC_`.
 
-1. Create a Supabase project and apply [`supabase/migrations/202610170001_initial.sql`](supabase/migrations/202610170001_initial.sql) (or the equivalent `schema.sql`). The migration creates structured token, NFT, GTD, narrative, social-post, CTO-evidence, provider-security, sync, and idempotency tables. RLS is enabled; no `anon` or `authenticated` policies are granted.
-2. Set private server variables in Netlify or `.env.local`: `DATA_MODE=live`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and a strong `INGESTION_SECRET`. Never use a `NEXT_PUBLIC_` prefix for secrets.
-3. Optionally configure `GOPLUS_ACCESS_TOKEN`, `SOLANA_RPC_URL`, `SECURITY_TTL_SECONDS`, `MIN_LIQUIDITY_USD`, `APP_ORIGIN`, and `ALLOWED_INGEST_ORIGINS`.
-4. Run a separate worker in an environment where the selected Agent-Reach version and its supported authentication are configured. It must emit the documented normalized envelope and POST to `https://<site>/api/ingest/social` with the same `INGESTION_SECRET`.
-5. Configure the external scheduler (for example, cron or a systemd timer) at the interval appropriate to the worker/provider limits. Example and security notes are in `worker/README.md`.
+### Next.js/API
 
-The repo deliberately does not invent an Agent-Reach subcommand, login flow, cookie name, or parser. `worker/run-agent-reach.mjs` invokes an explicitly configured executable with `shell: false`, a controlled environment allowlist, a lock and timeout; a project-specific adapter must follow the exact Agent-Reach documentation/version and print one valid envelope to stdout.
+**Wajib untuk live:**
 
-## Deploy to Netlify
+- `DATA_MODE=live`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY` — service role key hanya di server.
+- `INGESTION_SECRET` — secret kuat yang sama dengan worker.
 
-Connect this repository to Netlify, use the included `netlify.toml`, and set the environment variables above in the site settings. Apply the Supabase migration before switching to live mode. Social collection remains on the separate worker; Netlify functions only accept normalized protected batches and serve read APIs. Build locally first with `npm run build`.
+**Opsional:** `GOPLUS_ACCESS_TOKEN`, `SOLANA_RPC_URL` (default kode memakai public Solana endpoint), `SECURITY_TTL_SECONDS` (default kode 900), `MIN_LIQUIDITY_USD` (contoh `.env.example`: 5000), `APP_ORIGIN`, dan `ALLOWED_INGEST_ORIGINS`. `ALLOWED_INGEST_ORIGINS` dipakai sebagai allowlist origin bila diperlukan; endpoint ingestion tetap membutuhkan Bearer secret.
 
-## Tests
+### Worker terpisah
+
+Worker memuat `.env.local` dari project root bila ada: memakai `process.loadEnvFile` Node bila tersedia, atau fallback `@next/env`; nilai yang sudah diberikan host dipertahankan. Pada server produksi gunakan secret store dan permission file ketat (misalnya `chmod 600`), bukan commit `.env.local`.
+
+**Wajib worker:** `INGESTION_URL=https://<site>/api/ingest/social`, `INGESTION_SECRET`, `AGENT_REACH_ADAPTER=node`, `AGENT_REACH_ADAPTER_ARGS_JSON=["worker/agent-reach-adapter.mjs"]`, serta `TWITTER_AUTH_TOKEN` dan `TWITTER_CT0`. Gunakan `AGENT_REACH_ENV_ALLOWLIST` dari `.env.example` untuk meneruskan cookie dan konfigurasi adapter. Konfigurasi query memakai `config/x-queries.json`, default maksimum 3 pencarian dan 10 hasil per query. Cookie X diletakkan hanya sebagai nilai secret `TWITTER_AUTH_TOKEN`/`TWITTER_CT0` di environment worker; adapter tidak mencari cookie browser.
+
+**Opsional worker:** `TWITTER_CLI_BIN`, `AGENT_REACH_SEARCH_DATE=YYYY-MM-DD`, `AGENT_REACH_QUERY_DELAY_MS` (default 500), `AGENT_REACH_SEARCH_TIMEOUT_MS`, `AGENT_REACH_QUERY_OFFSET`, `AGENT_REACH_TIMEOUT_MS` (runner default 120000), `WORKER_LOCK_FILE`, `HTTP_PROXY`, `HTTPS_PROXY`, dan `WORKER_INTERVAL_MS` (hanya override test/operasional terkontrol). Allowlist harus memuat hanya variabel yang diperlukan. Runner menolak meneruskan `INGESTION_SECRET` atau `SUPABASE_SERVICE_ROLE_KEY` ke adapter.
+
+Detail instalasi dan shim ada di [`worker/README.md`](worker/README.md). Agent-Reach adalah installer/router/doctor untuk backend upstream, bukan perintah `agent-reach search` yang diciptakan project. Adapter saat ini memanggil interface upstream `twitter search <query> --max <count> --json`; jika versi tool berubah, verifikasi output dan sesuaikan adapter.
+
+## Supabase dan live mode
+
+1. Buat project Supabase.
+2. Jalankan [`supabase/migrations/202610170001_initial.sql`](supabase/migrations/202610170001_initial.sql), atau gunakan [`supabase/schema.sql`](supabase/schema.sql) pada project baru.
+3. Pastikan RLS aktif dan tidak menambahkan policy publik untuk service-role data.
+4. Isi variabel Next.js di atas, jalankan aplikasi, lalu lakukan ingest dari worker. Live tidak dianggap aktif hanya karena variabel sudah diisi; harus ada batch worker sukses yang tercatat.
+
+## Demo, refresh, dan worker
+
+- Dashboard demo dapat dijalankan tanpa Supabase.
+- UI dashboard melakukan auto-refresh **setiap 10 menit** dan mempertahankan snapshot saat request kosong/gagal; ini bukan pengumpulan X.
+- `npm run worker` adalah scheduler proses terpisah: langsung menjalankan satu run lalu mengulang setiap **600000 ms (10 menit)**. Run yang masih berjalan dilewati, bukan diantrekan. Jangan menjalankan cron/systemd kedua yang menggandakan scheduler; bila memakai process manager, jalankan satu proses `npm run worker`.
+- Worker membaca query dari `config/x-queries.json`, mengirim satu envelope normalisasi, dan server melakukan validasi, deduplikasi, rate limit, serta pemeriksaan security sendiri.
+
+## Perintah pengujian, build, dan deploy
 
 ```bash
 npm run typecheck
 npm test
 npm run test:worker
 npm run build
-npx playwright install chromium
+npx playwright install chromium   # hanya bila browser Playwright belum ada
 npm run test:e2e
 ```
 
-Vitest tests cover address validation, security-gate behavior, provider failures, classification, normalized ingestion validation, and rate limiting. The Node worker suite tests bearer transport, HTTPS policy, retry behavior for 429, and non-retry for permanent 422 errors. Playwright smoke tests are configured; see `tests/` for the scenarios run against a local server.
+Deploy Netlify memakai `netlify.toml` (`npm run build`, plugin Next.js). Set environment live di Netlify, apply migrasi lebih dahulu, dan build lokal sebelum deploy. Worker tetap dijalankan di host terpisah. Netlify CLI/deploy aktual tidak diklaim berhasil tanpa site/project Netlify yang terhubung.
 
-## Current boundaries
+## Push ke GitHub dengan aman (tanpa cookie/key)
 
-- No external credentials or database were available in this implementation session; live mode, Netlify deployment, and actual Agent-Reach/X ingestion were not connected or executed. Demo mode and provider logic are explicit and testable locally.
-- `npm run build` and local production HTTP smoke checks pass; Netlify TOML parses correctly. A local Netlify CLI build stopped before running the plugin because no Netlify project/site ID is linked, so deploy-specific output still needs verification after the repository is connected.
-- Agent-Reach CLI commands, its authentication mechanism, and source output format vary by version/tool; a verified adapter is required before the scheduled worker can collect real X records.
-- GoPlus/RPC/provider coverage is chain- and field-specific. Solana holder distribution, Token-2022 extensions, liquidity control, bundle/sniper signals, and reliable developer attribution are not treated as known when the configured source does not supply them. Enabled filters fail closed on missing required data.
-- DEX Screener provides market snapshots rather than a historical OHLCV series in this integration; charts are blank unless real time-series points arrive in an accepted record.
-- No security scanner guarantees safety; this is screening, not investment advice.
-- In-memory rate limiting is per serverless instance. Use a shared edge/WAF rate limiter before public production traffic.
+`.gitignore` mengecualikan `.env`/`.env.*` kecuali `.env.example`, `.next`, log, report, dan lock worker. Sebelum commit, periksa perubahan dan pastikan tidak ada secret:
 
-## License / use
+```bash
+git status --short
+git diff -- README.md worker/README.md
+# review nama/path saja; jangan cat atau grep nilai .env.local
+git diff --check
+git add README.md worker/README.md
+git diff --cached --check
+git diff --cached --name-only
+```
 
-Review the upstream provider terms and configure appropriate rate limits before public production use.
+Contoh staging di atas hanya untuk perubahan dokumentasi; tambahkan file source yang memang ingin dikirim setelah ditinjau. Periksa isi staging dan riwayat dengan secret scanner sebelum push, karena `.gitignore` tidak menghapus file yang sudah pernah dilacak. Push melalui kredensial GitHub yang dikelola aman oleh host/credential manager. Jangan menaruh PAT di URL remote, commit, issue, log, atau README. Bila secret pernah terunggah, segera rotasi/revoke; menghapus file pada commit berikutnya tidak menghapusnya dari riwayat.
+
+## Batas keamanan
+
+Service-role key, `INGESTION_SECRET`, cookie X, dan token provider hanya berada di server/worker secret store. API ingestion memakai HTTPS untuk endpoint produksi, bearer authorization, schema ketat, batas body, rate limit, dan idempotency. Runner memakai `shell:false`, environment allowlist, lock, timeout, dan batas stdout. Shim hanya mengirim dua cookie ke bootstrap first-party X yang spesifik dan menghapus header/cookie sensitif dari request lain. Ini adalah screening, bukan jaminan keamanan atau nasihat investasi.
+
+## Referensi
+
+- [`docs/API.md`](docs/API.md)
+- [`docs/research-notes.md`](docs/research-notes.md)
+- [`supabase/schema.sql`](supabase/schema.sql)
+- [`worker/README.md`](worker/README.md)

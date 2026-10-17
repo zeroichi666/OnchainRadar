@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity, AlertTriangle, ArrowDownUp, ArrowRight, ArrowUpRight, Bell, Bookmark, CalendarDays,
@@ -14,6 +14,8 @@ import { DashboardPayloadSchema, type DashboardPayload, type GtdOpportunity, typ
 import { formatDate, formatNumber, formatPercent, formatUsd, shortAddress, chainLabel, timeAgo } from "@/lib/format";
 import { scoreApprovedToken } from "@/lib/scoring";
 import { defaultClientSettings, RadarClientSettingsSchema, type RadarClientSettings } from "@/lib/settings";
+import { AUTO_REFRESH_MS, DASHBOARD_TIMEOUT_MS, hasDashboardRecords } from "@/lib/dashboard-refresh";
+import { SocialReviewSection } from "@/components/social-review-queue";
 
 const navItems = [
   { name: "Overview", icon: Home }, { name: "Free Mint", icon: Sparkles }, { name: "GTD Mint", icon: Target },
@@ -218,19 +220,47 @@ export function RadarDashboard() {
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  const settingsRef = useRef(settings);
+  const dataRef = useRef<DashboardPayload | null>(null);
+  const pendingRef = useRef<{ controller: AbortController; key: string } | null>(null);
+  const mountedRef = useRef(false);
+  const [refreshNote, setRefreshNote] = useState("");
+
   async function loadDashboard(nextSettings: RadarClientSettings, isRefresh = false) {
+    const key = JSON.stringify(nextSettings);
+    if (pendingRef.current?.key === key) return;
+    pendingRef.current?.controller.abort();
+    const controller = new AbortController();
+    pendingRef.current = { controller, key };
+    const timeout = window.setTimeout(() => controller.abort(), DASHBOARD_TIMEOUT_MS);
     if (isRefresh) setRefreshing(true); else setLoading(true);
     setError("");
+    setRefreshNote("");
     try {
-      const query = encodeURIComponent(JSON.stringify(nextSettings));
-      const response = await fetch(`/api/dashboard?settings=${query}`, { cache: "no-store" });
+      const response = await fetch(`/api/dashboard?settings=${encodeURIComponent(key)}`, { cache: "no-store", signal: controller.signal });
       if (!response.ok) throw new Error(`Dashboard request failed (${response.status}).`);
       const parsed = DashboardPayloadSchema.safeParse(await response.json());
       if (!parsed.success) throw new Error("The server returned data that does not match the dashboard schema.");
-      setData(parsed.data);
+      if (controller.signal.aborted || !mountedRef.current || pendingRef.current?.controller !== controller) return;
+      // Do not union approved tokens across snapshots: a newer security verdict may revoke approval.
+      if (dataRef.current?.mode === parsed.data.mode && hasDashboardRecords(dataRef.current) && !hasDashboardRecords(parsed.data)) {
+        setRefreshNote("No records returned. Showing the previous snapshot; it may be out of date. Retrying automatically in 10 minutes.");
+      } else {
+        dataRef.current = parsed.data;
+        setData(parsed.data);
+        if (isRefresh) setRefreshNote("Refresh complete. Auto refresh every 10 minutes.");
+      }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Dashboard data could not be loaded.");
-    } finally { setLoading(false); setRefreshing(false); }
+      if (!mountedRef.current || pendingRef.current?.controller !== controller) return;
+      const message = controller.signal.aborted ? "Dashboard request timed out." : cause instanceof Error ? cause.message : "Dashboard data could not be loaded.";
+      setError(`${message} ${dataRef.current ? "Showing the previous snapshot; it may be out of date. " : ""}Retrying automatically in 10 minutes.`);
+    } finally {
+      window.clearTimeout(timeout);
+      if (pendingRef.current?.controller === controller) {
+        pendingRef.current = null;
+        if (mountedRef.current) { setLoading(false); setRefreshing(false); }
+      }
+    }
   }
   async function loadHealth() {
     try { const response = await fetch("/api/health", { cache: "no-store" }); if (response.ok) setHealth(await response.json()); } catch { setHealth(null); }
@@ -238,12 +268,24 @@ export function RadarDashboard() {
   useEffect(() => {
     let current = defaultClientSettings;
     try { const saved = localStorage.getItem(settingsKey); if (saved) { const result = RadarClientSettingsSchema.safeParse(JSON.parse(saved)); if (result.success) current = result.data; } const savedWatch = JSON.parse(localStorage.getItem(watchKey) ?? "[]"); if (Array.isArray(savedWatch)) setWatchlist(savedWatch.filter((x) => typeof x === "string")); } catch { /* Ignore malformed local preferences. */ }
+    mountedRef.current = true;
+    settingsRef.current = current;
     setSettings(current);
     void loadDashboard(current);
     void loadHealth();
     const listener = () => { void loadHealth(); };
     window.addEventListener("radar-refresh-health", listener);
-    return () => window.removeEventListener("radar-refresh-health", listener);
+    const timer = window.setInterval(() => {
+      void loadDashboard(settingsRef.current, true);
+      void loadHealth();
+    }, AUTO_REFRESH_MS);
+    return () => {
+      mountedRef.current = false;
+      window.clearInterval(timer);
+      pendingRef.current?.controller.abort();
+      pendingRef.current = null;
+      window.removeEventListener("radar-refresh-health", listener);
+    };
   }, []);
   function toggleWatch(id: string) {
     setWatchlist((current) => { const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id]; try { localStorage.setItem(watchKey, JSON.stringify(next)); } catch { /* Browser storage may be disabled. */ } return next; });
@@ -251,6 +293,7 @@ export function RadarDashboard() {
   function saveSettings(next: RadarClientSettings) {
     const parsed = RadarClientSettingsSchema.safeParse(next);
     if (!parsed.success) { setError("Settings are outside supported ranges."); return; }
+    settingsRef.current = parsed.data;
     setSettings(parsed.data);
     try { localStorage.setItem(settingsKey, JSON.stringify(parsed.data)); } catch { setError("Settings could not be saved in this browser."); }
     void loadDashboard(parsed.data, true);
@@ -267,14 +310,15 @@ export function RadarDashboard() {
     <div className="lg:ml-[246px]">
       <header className="sticky top-0 z-30 flex h-[64px] items-center justify-between border-b border-white/[0.06] bg-[#080c11]/90 px-4 backdrop-blur-xl md:px-7"><div className="flex items-center gap-3"><Button className="lg:hidden" size="icon" variant="ghost" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"><Menu size={18}/></Button><div className="lg:hidden flex items-center gap-2"><Radar size={17} className="text-emerald-300"/><b className="text-xs">ONCHAIN RADAR</b></div><div className="hidden items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[11px] text-slate-500 md:flex"><Command size={12}/> Intelligence workspace <span className="text-slate-700">/</span><span className="text-slate-300">{active}</span></div></div><div className="flex items-center gap-2 md:gap-3"><div className="flex items-center gap-2 rounded-full border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5"><span className={`size-1.5 rounded-full ${data?.mode === "live" ? "bg-emerald-300" : "bg-violet-300"}`}/><span className="text-[10px] font-medium uppercase tracking-wider text-slate-400">{data?.mode ?? "loading"}</span></div><span className="hidden text-[10px] text-slate-600 sm:inline">{data ? `Updated ${timeAgo(data.generatedAt)}` : "Connecting…"}</span><Button size="icon" variant="ghost" aria-label="Refresh dashboard" disabled={refreshing} onClick={() => { void loadDashboard(settings, true); void loadHealth(); }}><RefreshCw size={15} className={refreshing ? "animate-spin" : ""}/></Button></div></header>
       <main className="mx-auto max-w-[1500px] px-4 py-6 md:px-7 md:py-8">
+        <div role="status" className="mb-4 text-xs text-slate-400">{refreshing ? "Refreshing…" : refreshNote || "Auto refresh every 10 minutes while this dashboard is open."}</div>
         {error && <div role="alert" className="mb-4 flex items-center gap-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-4 text-sm text-rose-200"><AlertTriangle size={16}/>{error}<Button className="ml-auto" size="sm" variant="ghost" onClick={() => void loadDashboard(settings, true)}>Retry</Button></div>}
         {loading && !data ? <div className="space-y-4"><div className="h-8 w-64 animate-pulse rounded bg-white/[0.05]"/><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 8 }, (_, i) => <div key={i} className="h-28 animate-pulse rounded-2xl border border-white/[0.04] bg-white/[0.02]"/>)}</div><div className="h-64 animate-pulse rounded-2xl border border-white/[0.04] bg-white/[0.02]"/></div> : !data ? <EmptyState icon={Activity} title="Dashboard unavailable" detail="No cached dataset could be loaded. Check your server configuration or retry."/> : <>
           {active === "Overview" && <OverviewBoard data={data} health={health}/>}
-          {active === "Free Mint" && <MintBoard mode="free" nfts={data.nfts} gtd={data.gtd} saved={watchlist} toggleSave={toggleWatch}/>}
-          {active === "GTD Mint" && <MintBoard mode="gtd" nfts={data.nfts} gtd={data.gtd} saved={watchlist} toggleSave={toggleWatch}/>}
-          {active === "Meme Coins" && <MemeTable tokens={data.tokens} reports={data.securityReports} saved={watchlist} toggleSave={toggleWatch}/>}
-          {active === "Community Takeover" && <CtoBoard tokens={data.tokens} claims={data.ctoClaims} reports={data.securityReports}/>}
-          {active === "X Narratives" && <NarrativeBoard narratives={data.narratives}/>}
+          {active === "Free Mint" && <><MintBoard mode="free" nfts={data.nfts} gtd={data.gtd} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="free-mint"/></>}
+          {active === "GTD Mint" && <><MintBoard mode="gtd" nfts={data.nfts} gtd={data.gtd} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="gtd-mint"/></>}
+          {active === "Meme Coins" && <><MemeTable tokens={data.tokens} reports={data.securityReports} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="meme-coin"/></>}
+          {active === "Community Takeover" && <><CtoBoard tokens={data.tokens} claims={data.ctoClaims} reports={data.securityReports}/><SocialReviewSection items={data.socialReviewQueue} area="cto"/></>}
+          {active === "X Narratives" && <><NarrativeBoard narratives={data.narratives}/><SocialReviewSection items={data.socialReviewQueue} area="all"/></>}
           {active === "Security Review" && <SecurityBoard queue={data.securityQueue} reports={data.securityReports} exclusions={data.recentExclusions}/>}
           {active === "Watchlist" && <WatchlistBoard data={data} saved={watchlist} toggleSave={toggleWatch}/>}
           {active === "Settings" && <SettingsBoard settings={settings} onSave={saveSettings}/>}
