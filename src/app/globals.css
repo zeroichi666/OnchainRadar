@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bg: #080c11;
+  --panel: #0c1117;
+  --muted: #8290a5;
+  --line: rgba(148, 163, 184, .12);
+  --accent: #55e7a4;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: #e8edf5; font-family: Arial, Helvetica, sans-serif; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+::selection { background: rgba(85, 231, 164, .25); color: white; }
+:focus-visible { outline: 2px solid rgba(85, 231, 164, .7); outline-offset: 2px; }
+.nav-item { display: flex; width: 100%; align-items: center; gap: 11px; border: 1px solid transparent; border-radius: 9px; padding: 10px 12px; color: #778397; text-align: left; font-size: 12px; transition: background .16s ease, color .16s ease, border-color .16s ease; }
+.nav-item:hover { background: rgba(255,255,255,.035); color: #dbe3ed; }
+.nav-item-active { border-color: rgba(85,231,164,.13); background: rgba(85,231,164,.065); color: #a6f4ce; }
+.nav-item-active svg { color: #55e7a4; }
+.metric-card { transition: transform .18s ease, border-color .18s ease; }
+.metric-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,.14); }
+.table-scroll { width: 100%; overflow-x: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.2) transparent; }
+.data-table { width: 100%; min-width: 1120px; border-collapse: collapse; white-space: nowrap; }
+.data-table th { border-bottom: 1px solid rgba(255,255,255,.06); background: rgba(255,255,255,.015); padding: 12px 11px; color: #687588; text-align: left; font-size: 10px; font-weight: 600; letter-spacing: .045em; text-transform: uppercase; }
+.data-table td { border-bottom: 1px solid rgba(255,255,255,.045); padding: 11px; color: #a9b4c3; font-size: 11px; }
+.data-table tr:last-child td { border-bottom: 0; }
+.data-table tbody tr { transition: background .12s ease; }
+.data-table tbody tr:hover { background: rgba(255,255,255,.018); }
+input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.7); }
+input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { opacity: .45; }
+@media (max-width: 640px) {
+  .data-table { min-width: 1040px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
