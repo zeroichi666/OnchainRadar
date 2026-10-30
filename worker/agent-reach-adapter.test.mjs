@@ -88,6 +88,34 @@ describe("Agent-Reach / twitter-cli adapter", () => {
     assert.equal(envelope.narratives[0].growthPct, null);
   });
 
+  it("stores Web3 game search results as a standard, source-linked narrative", () => {
+    const syncedAt = "2026-10-17T08:30:00.000Z";
+    const envelope = buildEnvelope([{
+      group: "games",
+      query: "onchain game playtest",
+      tweets: [{ id: "game-1", url: "https://x.com/game_source/status/game-1", text: "Web3 game playtest on Ronin starts today", author: { screenName: "game_source" }, createdAt: syncedAt }],
+    }], syncedAt);
+    const gameNarrative = envelope.narratives.find((item) => item.category === "Web3 Games");
+    assert.ok(gameNarrative);
+    assert.equal(gameNarrative.sourcePosts[0].sourceUrl, "https://x.com/game_source/status/game-1");
+    assert.equal(gameNarrative.keywords[0], "onchain game playtest");
+    assert.equal(Object.hasOwn(envelope, "gameSignals"), false);
+  });
+
+  it("stores VPS search results as source-linked Free VPS posts without creating token candidates", () => {
+    const syncedAt = "2026-10-17T08:30:00.000Z";
+    const envelope = buildEnvelope([{
+      group: "vps",
+      query: "free VPS",
+      tweets: [{ id: "vps-1", url: "https://x.com/host_source/status/vps-1", text: "Free VPS giveaway on Base $HOST CA: 0x1111111111111111111111111111111111111111", author: { screenName: "host_source" }, createdAt: syncedAt }],
+    }], syncedAt);
+    const vpsNarrative = envelope.narratives.find((item) => item.category === "Free VPS");
+    assert.ok(vpsNarrative);
+    assert.equal(vpsNarrative.sourcePosts[0].sourceUrl, "https://x.com/host_source/status/vps-1");
+    assert.equal(vpsNarrative.keywords[0], "free VPS");
+    assert.deepEqual(envelope.tokens, []);
+  });
+
   it("rejects unsuccessful or non-JSON upstream envelopes", () => {
     assert.throws(() => parseSearchOutput("not json"), /valid JSON/);
     assert.throws(() => parseSearchOutput(JSON.stringify({ ok: false, error: { code: "not_authenticated" } })), /unsuccessful/);
@@ -119,6 +147,32 @@ describe("Agent-Reach / twitter-cli adapter", () => {
       { group: "meme", query: "m2" },
       { group: "narratives", query: "r1" },
     ]);
+  });
+
+  it("rotates categories when the search limit is lower than the number of configured categories", () => {
+    const config = { nft: ["n1"], meme: ["m1"], narratives: ["r1"], games: ["g1"] };
+    const rotations = [0, 1, 2, 3].map((offset) => selectSearches(config, 3, offset));
+    for (const searches of rotations) {
+      assert.equal(searches.length, 3);
+      assert.equal(new Set(searches.map((search) => search.group)).size, 3);
+    }
+    for (const group of Object.keys(config)) {
+      assert.equal(rotations.filter((searches) => searches.some((search) => search.group === group)).length, 3);
+    }
+  });
+
+  it("reserves one search for VPS on every run while rotating the remaining categories", () => {
+    const config = { nft: ["n1", "n2"], meme: ["m1", "m2"], narratives: ["r1"], games: ["g1"], vps: ["v1", "v2"] };
+    const first = selectSearches(config, 3, 0);
+    const second = selectSearches(config, 3, 1);
+    assert.equal(first.length, 3);
+    assert.equal(second.length, 3);
+    assert.equal(first[0].group, "vps");
+    assert.equal(second[0].group, "vps");
+    assert.notEqual(first[0].query, second[0].query);
+    assert.equal(new Set(first.map((search) => search.group)).size, 3);
+    assert.equal(new Set(second.map((search) => search.group)).size, 3);
+    assert.deepEqual(selectSearches(config, 1, 3), [{ group: "vps", query: "v2" }]);
   });
 
   it("runs read-only twitter search and transports normalized results without forwarding ingestion secrets to the CLI", async () => {

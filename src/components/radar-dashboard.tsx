@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Activity, AlertTriangle, ArrowDownUp, ArrowRight, ArrowUpRight, Bell, Bookmark, CalendarDays,
+  Activity, AlertTriangle, ArrowDownUp, ArrowRight, ArrowUpRight, Bell, Bookmark, CalendarDays, Gamepad2,
   CheckCircle2, ChevronLeft, ChevronRight, Clock3, Command, ExternalLink, Filter, Flame, Gauge,
   Globe2, Grid2X2, Home, Layers3, LockKeyhole, Menu, Radar, RefreshCw, Search, Settings2,
-  Shield, ShieldAlert, SlidersHorizontal, Sparkles, Target, TrendingUp, Wallet, X, Zap,
+  Server, Shield, ShieldAlert, SlidersHorizontal, Sparkles, Target, TrendingUp, Wallet, X, Zap,
 } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip, Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Select } from "@/components/ui/primitives";
@@ -16,10 +16,12 @@ import { scoreApprovedToken } from "@/lib/scoring";
 import { defaultClientSettings, RadarClientSettingsSchema, type RadarClientSettings } from "@/lib/settings";
 import { AUTO_REFRESH_MS, DASHBOARD_TIMEOUT_MS, hasDashboardRecords } from "@/lib/dashboard-refresh";
 import { SocialReviewSection } from "@/components/social-review-queue";
+import { Web3GamesBoard } from "@/components/web3-games-board";
+import { FreeVpsBoard } from "@/components/free-vps-board";
 
 const navItems = [
   { name: "Overview", icon: Home }, { name: "Free Mint", icon: Sparkles }, { name: "GTD Mint", icon: Target },
-  { name: "Meme Coins", icon: Flame }, { name: "Community Takeover", icon: UsersIcon }, { name: "X Narratives", icon: TrendingUp },
+  { name: "Meme Coins", icon: Flame }, { name: "Web3 Games", icon: Gamepad2 }, { name: "Free VPS", icon: Server }, { name: "Community Takeover", icon: UsersIcon }, { name: "X Narratives", icon: TrendingUp },
   { name: "Security Review", icon: ShieldAlert }, { name: "Watchlist", icon: Bookmark }, { name: "Settings", icon: Settings2 },
 ];
 function UsersIcon(props: React.ComponentProps<typeof Activity>) { return <Globe2 {...props} />; }
@@ -317,6 +319,8 @@ export function RadarDashboard() {
           {active === "Free Mint" && <><MintBoard mode="free" nfts={data.nfts} gtd={data.gtd} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="free-mint"/></>}
           {active === "GTD Mint" && <><MintBoard mode="gtd" nfts={data.nfts} gtd={data.gtd} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="gtd-mint"/></>}
           {active === "Meme Coins" && <><MemeTable tokens={data.tokens} reports={data.securityReports} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="meme-coin"/></>}
+          {active === "Web3 Games" && <Web3GamesBoard narratives={data.narratives.filter((item) => item.category === "Web3 Games")}/>}
+          {active === "Free VPS" && <FreeVpsBoard narratives={data.narratives.filter((item) => item.category === "Free VPS")}/>}
           {active === "Community Takeover" && <><CtoBoard tokens={data.tokens} claims={data.ctoClaims} reports={data.securityReports}/><SocialReviewSection items={data.socialReviewQueue} area="cto"/></>}
           {active === "X Narratives" && <><NarrativeBoard narratives={data.narratives}/><SocialReviewSection items={data.socialReviewQueue} area="all"/></>}
           {active === "Security Review" && <SecurityBoard queue={data.securityQueue} reports={data.securityReports} exclusions={data.recentExclusions}/>}

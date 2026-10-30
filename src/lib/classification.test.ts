@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCtoCandidate, normalizeGtdOpportunity, normalizeNftOpportunity, normalizeNarrative } from "@/lib/classification";
+import { classifyWeb3GameSignal, extractWeb3GameChain, normalizeCtoCandidate, normalizeGtdOpportunity, normalizeNftOpportunity, normalizeNarrative } from "@/lib/classification";
 import type { GtdOpportunity, Narrative, NftOpportunity, TokenCandidate } from "@/lib/domain";
 
 const now = Date.now();
@@ -46,5 +46,20 @@ describe("narrative deduplication", () => {
     expect(normalized.mentionCount).toBe(2);
     expect(normalized.uniqueAuthors).toBe(2);
     expect(normalized.engagement).toBe(17);
+  });
+});
+
+describe("Web3 game signal classification", () => {
+  it("labels common game discovery signals without asserting verification", () => {
+    expect(classifyWeb3GameSignal("Web3 game closed beta opens today")).toBe("playtest");
+    expect(classifyWeb3GameSignal("P2E game launch for the season")).toBe("play-to-earn");
+    expect(classifyWeb3GameSignal("Fully onchain game update")).toBe("onchain-game");
+    expect(classifyWeb3GameSignal("Web3 gaming community update")).toBe("gaming-update");
+  });
+  it("extracts a chain only when one explicit game chain is mentioned", () => {
+    expect(extractWeb3GameChain("Web3 game playtest on Ronin")).toBe("ronin");
+    expect(extractWeb3GameChain("Fully onchain game on Base")).toBe("base");
+    expect(extractWeb3GameChain("Web3 game on Ronin and on Base")).toBeUndefined();
+    expect(extractWeb3GameChain("Web3 game on an unreported chain")).toBeUndefined();
   });
 });

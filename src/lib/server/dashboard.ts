@@ -12,7 +12,7 @@ import type { RadarClientSettings } from "@/lib/settings";
 import { enrichCandidateBatch } from "@/lib/server/dexscreener";
 import { fetchGoPlusSecurity } from "@/lib/server/goplus";
 import { fetchSolanaSecurity } from "@/lib/server/solana-security";
-import { getSupabaseServerClient, readLastSuccessfulSync, readPayloadTable, readSecurityReports, upsertCandidate, upsertSecurityReport } from "@/lib/server/supabase";
+import { getStorageStatus, readLastSuccessfulSync, readPayloadTable, readSecurityReports, upsertCandidate, upsertSecurityReport } from "@/lib/server/supabase";
 
 const nowIso = () => new Date().toISOString();
 const reportKey = (report: SecurityReport) => `${report.chain}:${report.address.toLowerCase()}`;
@@ -22,7 +22,7 @@ function parseRows<T>(rows: { payload: unknown }[], schema: { safeParse(value: u
   for (const row of rows) {
     const parsed = schema.safeParse(row.payload);
     if (parsed.success && parsed.data !== undefined) result.push(parsed.data);
-    else warnings.push(`Ignored one invalid ${label} record from Supabase.`);
+    else warnings.push(`Ignored one invalid ${label} record from storage.`);
   }
   return result;
 }
@@ -46,10 +46,10 @@ export async function getDashboardPayload(clientSettings?: RadarClientSettings):
     mode: "live" as const, generatedAt: nowIso(), lastSuccessfulSocialSyncAt: null, warnings,
     nfts: [], gtd: [], tokens: [], ctoClaims: [], securityQueue: [], securityReports: [], providerReports: [], narratives: [], socialReviewQueue: [], recentExclusions: [],
   };
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    warnings.push("Live mode is enabled, but Supabase server credentials are missing. No demo data is shown in live mode.");
-    warnings.push("Configure the protected Agent-Reach worker and server-side provider settings to populate the dashboard.");
+  const storage = getStorageStatus();
+  if (!storage.configured) {
+    warnings.push(storage.detail);
+    warnings.push("Configure the selected storage backend and protected Agent-Reach worker settings to populate the dashboard.");
     return DashboardPayloadSchema.parse(empty);
   }
 
@@ -67,7 +67,7 @@ export async function getDashboardPayload(clientSettings?: RadarClientSettings):
   } catch {
     // A failed read is not an empty dataset. Let APIs return a retryable failure
     // so refreshing clients can keep their last successful snapshot.
-    throw new Error("Supabase dashboard data could not be read.");
+    throw new Error("Live dashboard data could not be read.");
   }
   if (!process.env.INGESTION_SECRET) warnings.push("INGESTION_SECRET is not configured; the worker cannot submit protected live data.");
   if (!lastSuccessfulSocialSyncAt) warnings.push("No successful Agent-Reach/X synchronization has been recorded yet.");

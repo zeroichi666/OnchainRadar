@@ -4,7 +4,7 @@ test("dashboard visibly labels demo mode and navigation changes the active view"
   await page.goto("/");
   await expect(page.locator("header").getByText("demo", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Overview" })).toBeVisible();
-  for (const section of ["Free Mint", "GTD Mint", "Meme Coins", "Community Takeover", "X Narratives", "Security Review", "Watchlist", "Settings"]) {
+  for (const section of ["Free Mint", "GTD Mint", "Meme Coins", "Web3 Games", "Community Takeover", "X Narratives", "Security Review", "Watchlist", "Settings"]) {
     await page.getByRole("button", { name: section }).click();
     await expect(page.locator("header").getByText(section, { exact: true })).toBeVisible();
   }
@@ -109,6 +109,29 @@ test("detected X claim groups show actual source links in Free Mint, GTD, Meme C
   await expect(all).toContainText("3 grouped records · 3 source posts");
   await all.getByRole("button", { name: "All history" }).click();
   await expect(all).toContainText("3 grouped records · 4 source posts");
+});
+
+test("Web3 Games displays source-linked X signals and supports search and chain filtering", async ({ page, request }) => {
+  const response = await request.get("/api/dashboard");
+  const payload = await response.json();
+  payload.narratives = [{
+    id: "agent-reach-x-games", category: "Web3 Games", keywords: ["onchain game playtest"], mentionCount: 1,
+    uniqueAuthors: 1, engagement: null, growthPct: null, accelerationScore: null, securityPassRatio: null,
+    sourcePosts: [{ externalId: "game-1", author: "GameStudio", sourceUrl: "https://x.com/GameStudio/status/game-1", text: "Web3 game playtest on Ronin starts today", publishedAt: "2026-10-17T10:00:00.000Z" }],
+    lastUpdatedAt: "2026-10-17T10:00:00.000Z", demo: false,
+  }];
+  await page.route("**/api/dashboard**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Web3 Games" }).click();
+  await expect(page.getByRole("heading", { name: "Web3 Games", exact: true })).toBeVisible();
+  await expect(page.getByText("Discovery only: social posts and chain mentions are not independently verified.")).toBeVisible();
+  await expect(page.locator("span").filter({ hasText: /^playtest$/ })).toBeVisible();
+  await expect(page.locator("span").filter({ hasText: /^Ronin$/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open original X post ↗" })).toHaveAttribute("href", "https://x.com/GameStudio/status/game-1");
+  await page.getByLabel("Filter game signals by chain").selectOption("ronin");
+  await expect(page.getByText("1 signal · sorted by source post time")).toBeVisible();
+  await page.getByLabel("Search game signals").fill("no-match");
+  await expect(page.getByRole("heading", { name: "No matching game signals" })).toBeVisible();
 });
 
 test("social ingestion cannot be used without valid worker credentials", async ({ request }) => {

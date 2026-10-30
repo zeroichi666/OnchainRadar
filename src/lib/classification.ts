@@ -61,3 +61,29 @@ export function normalizeNarrative(row: Narrative): Narrative {
   const engagement = engagementComplete ? sourcePosts.reduce((sum, post) => sum + post.likes! + post.reposts! + post.replies!, 0) : null;
   return { ...row, sourcePosts, mentionCount: sourcePosts.length, uniqueAuthors, engagement };
 }
+
+export const web3GameSignalTypes = ["game-launch", "playtest", "play-to-earn", "onchain-game", "gamefi", "gaming-update", "unknown"] as const;
+export type Web3GameSignalType = typeof web3GameSignalTypes[number];
+
+const GAME_CHAIN_MARKERS: [string, RegExp][] = [
+  ["ethereum", /\b(?:ethereum|eth mainnet)\b/i], ["solana", /\bsolana\b/i], ["base", /\bbase chain\b|\bon base\b/i],
+  ["arbitrum", /\barbitrum\b/i], ["optimism", /\boptimism\b/i], ["polygon", /\bpolygon\b/i], ["bsc", /\b(?:bsc|bnb chain|binance smart chain)\b/i],
+  ["ronin", /\bronin\b/i], ["immutable", /\bimmutable(?: zkEVM)?\b/i], ["sui", /\bsui network\b/i], ["aptos", /\baptos\b/i],
+  ["avalanche", /\bavalanche\b/i], ["celo", /\bcelo\b/i], ["oasys", /\boasys\b/i], ["ton", /\bton blockchain\b/i],
+  ["starknet", /\bstarknet\b/i], ["zksync", /\bzk[- ]?sync\b/i],
+];
+
+export function classifyWeb3GameSignal(text: string): Web3GameSignalType {
+  if (/play[-\s]?to[-\s]?earn|\bp2e\b|earn while playing/i.test(text)) return "play-to-earn";
+  if (/playtest|closed beta|open beta|alpha test|testnet|early access/i.test(text)) return "playtest";
+  if (/on[-\s]?chain game|fully onchain|onchain gaming/i.test(text)) return "onchain-game";
+  if (/\bgamefi\b/i.test(text)) return "gamefi";
+  if (/\b(launch(?:ed|ing)?|release[sd]?|available now|mainnet launch|season \d+)\b/i.test(text)) return "game-launch";
+  if (/web\s?3|blockchain game|crypto game|web3 gaming|gaming/i.test(text)) return "gaming-update";
+  return "unknown";
+}
+
+export function extractWeb3GameChain(text: string): string | undefined {
+  const matches = GAME_CHAIN_MARKERS.filter(([, pattern]) => pattern.test(text)).map(([chain]) => chain);
+  return matches.length === 1 ? matches[0] : undefined;
+}

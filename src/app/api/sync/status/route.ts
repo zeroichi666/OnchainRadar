@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { publicReadLimit } from "@/lib/server/api-helpers";
-import { readLastSuccessfulSync, getSupabaseServerClient } from "@/lib/server/supabase";
+import { getStorageStatus, readLastSuccessfulSync } from "@/lib/server/supabase";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const limited = publicReadLimit(request); if (limited) return limited;
   const mode = process.env.DATA_MODE === "live" ? "live" : "demo";
-  if (!getSupabaseServerClient()) return NextResponse.json({ mode, source: "agent-reach", lastSuccessfulAt: null, status: "not-configured", staleAfterSeconds: 21600 }, { headers: { "Cache-Control": "no-store" } });
+  if (!getStorageStatus().configured) return NextResponse.json({ mode, source: "agent-reach", lastSuccessfulAt: null, status: "not-configured", staleAfterSeconds: 21600 }, { headers: { "Cache-Control": "no-store" } });
   try {
     const lastSuccessfulAt = await readLastSuccessfulSync("agent-reach");
     const parsedAt = lastSuccessfulAt ? Date.parse(lastSuccessfulAt) : NaN;

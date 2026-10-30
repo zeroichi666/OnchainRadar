@@ -21,19 +21,21 @@ Read routes return JSON and use HTTP 400 for invalid filters, 404 for unknown/no
 
 The dashboard date-filter response exposes `X-Social-Date` and `X-Social-Time-Zone` headers. This is a read-time view only: historical posts remain stored, and the normal dashboard UI can switch between a chosen WIB date and all history. Live worker searches default to today's WIB date and enforce exact post timestamps after X's date-only source query filtering.
 
+With `DATA_MODE=live`, `STORAGE_PROVIDER` selects persistence: `supabase` is the default; `sqlite` uses `SQLITE_DATABASE_PATH` (default `.data/onchain-radar.sqlite`). SQLite is intended for local or self-hosted persistent disks, not ephemeral serverless storage. The health endpoint reports the active backend and SQLite creates its file automatically.
+
 ## Protected ingestion
 
 All ingestion routes require `Authorization: Bearer <INGESTION_SECRET>` over HTTPS in production, plus `Content-Type: application/json`. Browser-supplied `Origin` values are checked against `APP_ORIGIN`, `SITE_URL`, `URL`, `DEPLOY_PRIME_URL`, and `ALLOWED_INGEST_ORIGINS`; server-to-server workers normally omit `Origin`. Responses are `no-store`. The service role remains server-only.
 
 ### `POST /api/ingest/social`
 
-The primary Agent-Reach worker route (backward-compatible alias: `POST /api/ingest`). It validates `schemaVersion: 1`, `source: "agent-reach"`, `eventId`, `syncedAt`, and normalized arrays of `nfts`, `gtd`, `tokens`, and `narratives` using `src/lib/server/ingest-schema.ts`. Maximum body size is 1 MB. Repeating an accepted `eventId` is idempotent.
+The primary Agent-Reach worker route (backward-compatible alias: `POST /api/ingest`). It validates `schemaVersion: 1`, `source: "agent-reach"`, `eventId`, `syncedAt`, and normalized arrays of `nfts`, `gtd`, `tokens`, and `narratives` using `src/lib/server/ingest-schema.ts`. The worker stores Free VPS search results as the standard `Free VPS` narrative category with original X posts; no provider or offer is independently verified by ingestion. Maximum body size is 1 MB. Repeating an accepted `eventId` is idempotent.
 
 The schema deliberately does not accept provider security verdicts. X/social claims cannot assert `PASS`; the server performs its own chain-specific security checks.
 
 ### `POST /api/ingest/market`
 
-Protected refresh body: `{"chain":"base","addresses":["0x..."]}`. Accepts 1–30 valid addresses, but only refreshes candidates already in Supabase; it cannot insert an arbitrary address. DEX Screener results and warnings are generated server-side.
+Protected refresh body: `{"chain":"base","addresses":["0x..."]}`. Accepts 1–30 valid addresses, but only refreshes candidates already in the selected storage backend; it cannot insert an arbitrary address. DEX Screener results and warnings are generated server-side.
 
 ### `POST /api/ingest/security`
 
@@ -47,6 +49,6 @@ Protected refresh body: `{"chain":"solana","address":"..."}`. The address must b
 - `415`: content type is not JSON
 - `422`: invalid schema/address
 - `429`: in-process rate limit exceeded; retry after the provided interval
-- `503`: worker secret, Supabase, or required provider path is unavailable
+- `503`: worker secret, selected storage backend, or required provider path is unavailable
 
 The in-memory limiter is per serverless instance. Before public production traffic, add shared edge/WAF limits and monitor provider quotas.

@@ -2,6 +2,7 @@ node_modules
 .next
 out
 .netlify
+.data/
 coverage
 playwright-report
 test-results

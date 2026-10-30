@@ -1,6 +1,6 @@
 # Onchain Radar
 
-Onchain Radar adalah dashboard discovery Web3 yang berfokus pada keamanan untuk NFT mint, GTD allocation, kandidat meme coin, community takeover, dan narasi X. Aplikasi ini memakai Next.js/TypeScript, provider server-only, Supabase, validasi Zod, serta worker sosial terjadwal yang berjalan terpisah.
+Onchain Radar adalah dashboard discovery Web3 yang berfokus pada keamanan untuk NFT mint, GTD allocation, kandidat meme coin, community takeover, narasi X, Web3 Games, dan posting X tentang penawaran VPS gratis. Aplikasi ini memakai Next.js/TypeScript, provider server-only, Supabase, validasi Zod, serta worker sosial terjadwal yang berjalan terpisah.
 
 > README ini adalah panduan utama. Jangan pernah memasukkan cookie X, key Supabase, token, atau nilai `.env.local` ke Git.
 
@@ -10,7 +10,7 @@ Onchain Radar adalah dashboard discovery Web3 yang berfokus pada keamanan untuk 
 - Dependensi Node dipasang dengan `npm ci` dari `package-lock.json`: Next.js, React, TypeScript, Supabase SDK, Zod, library chain/UI, Vitest, dan Playwright. Tidak ada dependensi Python aplikasi yang dideklarasikan di repository.
 - Untuk pengumpulan X live: Python 3, upstream `twitter-cli` dengan executable `twitter`, dan dua cookie X yang valid. Shim Python tersedia di `worker/twitter-cli-compat/sitecustomize.py`.
 - Agent-Reach adalah tool pendamping installer/router/doctor, **bukan dependensi npm**. Runtime adapter memanggil `twitter` secara langsung; Agent-Reach tidak wajib untuk menjalankan dashboard demo. Ikuti petunjuk upstream untuk instalasinya dan verifikasi interface CLI di [`worker/README.md`](worker/README.md).
-- Untuk live storage: project Supabase dengan schema/migrasi yang sudah diterapkan. Untuk tes browser: Chromium Playwright atau executable browser yang kompatibel.
+- Untuk Supabase live storage: project Supabase dengan schema/migrasi yang sudah diterapkan. Mode SQLite lokal membutuhkan Node.js **22.13+** (`node:sqlite`). Untuk tes browser: Chromium Playwright atau executable browser yang kompatibel.
 
 ## Mulai lokal (demo)
 
@@ -27,7 +27,7 @@ Buka `http://localhost:3000`. Default `DATA_MODE=demo`; record demo diberi label
 ```text
 worker Agent-Reach/twitter-cli
   -> POST /api/ingest/social (Bearer + schema/rate/body limit)
-  -> Supabase PostgreSQL (RLS, idempotent batch)
+  -> SQLite lokal (transaksi/idempotent) atau Supabase PostgreSQL (RLS)
   -> Next.js server routes/provider refresh
   -> dashboard
 ```
@@ -40,7 +40,7 @@ Salin `.env.example` ke `.env.local` untuk Next.js lokal. Di Netlify, masukkan v
 
 ### Next.js/API
 
-**Wajib untuk live:**
+**Wajib untuk Supabase live storage (default):**
 
 - `DATA_MODE=live`
 - `SUPABASE_URL`
@@ -61,6 +61,23 @@ Detail instalasi dan shim ada di [`worker/README.md`](worker/README.md). Agent-R
 
 ## Supabase dan live mode
 
+### SQLite local mode
+
+Untuk memakai data live tanpa project Supabase, jalankan aplikasi pada Node.js **22.13+** dan set di `.env.local`:
+
+```dotenv
+DATA_MODE=live
+STORAGE_PROVIDER=sqlite
+SQLITE_DATABASE_PATH=.data/onchain-radar.sqlite
+INGESTION_SECRET=<secret-kuat-untuk-worker>
+```
+
+Tidak perlu mengisi `SUPABASE_URL` atau `SUPABASE_SERVICE_ROLE_KEY` dalam mode ini. File database dibuat otomatis; path relatif dihitung dari root proyek. Direktori `.data/` (termasuk file WAL SQLite) dikecualikan dari Git. Ingestion tetap memerlukan `INGESTION_SECRET` dan Bearer authorization seperti mode Supabase. `STORAGE_PROVIDER` yang tidak diisi tetap memilih Supabase demi kompatibilitas.
+
+SQLite lokal ditujukan untuk satu aplikasi pada mesin lokal atau host mandiri dengan disk persisten. Jangan gunakan file lokal ini sebagai storage produksi pada Netlify/serverless atau beberapa instance, karena filesystem fungsi dapat bersifat sementara dan tidak dibagi antar-instance. Gunakan Supabase untuk deployment seperti itu. Simpan cadangan file database secara terpisah.
+
+### Supabase live mode
+
 1. Buat project Supabase.
 2. Jalankan [`supabase/migrations/202610170001_initial.sql`](supabase/migrations/202610170001_initial.sql), atau gunakan [`supabase/schema.sql`](supabase/schema.sql) pada project baru.
 3. Pastikan RLS aktif dan tidak menambahkan policy publik untuk service-role data.
@@ -71,7 +88,7 @@ Detail instalasi dan shim ada di [`worker/README.md`](worker/README.md). Agent-R
 - Dashboard demo dapat dijalankan tanpa Supabase.
 - UI dashboard melakukan auto-refresh **setiap 10 menit** dan mempertahankan snapshot saat request kosong/gagal; ini bukan pengumpulan X.
 - `npm run worker` adalah scheduler proses terpisah: langsung menjalankan satu run lalu mengulang setiap **600000 ms (10 menit)**. Run yang masih berjalan dilewati, bukan diantrekan. Jangan menjalankan cron/systemd kedua yang menggandakan scheduler; bila memakai process manager, jalankan satu proses `npm run worker`.
-- Worker membaca query dari `config/x-queries.json`, mengirim satu envelope normalisasi, dan server melakukan validasi, deduplikasi, rate limit, serta pemeriksaan security sendiri.
+- Worker membaca query dari `config/x-queries.json`; satu pencarian VPS diprioritaskan setiap run, sedangkan slot lain tetap berotasi. Hasil VPS disimpan sebagai posting X yang belum diverifikasi, bukan direktori provider. Worker mengirim satu envelope normalisasi, dan server melakukan validasi, deduplikasi, rate limit, serta pemeriksaan security sendiri.
 
 ## Perintah pengujian, build, dan deploy
 
@@ -84,7 +101,7 @@ npx playwright install chromium   # hanya bila browser Playwright belum ada
 npm run test:e2e
 ```
 
-Deploy Netlify memakai `netlify.toml` (`npm run build`, plugin Next.js). Set environment live di Netlify, apply migrasi lebih dahulu, dan build lokal sebelum deploy. Worker tetap dijalankan di host terpisah. Netlify CLI/deploy aktual tidak diklaim berhasil tanpa site/project Netlify yang terhubung.
+Deploy Netlify memakai `netlify.toml` (`npm run build`, plugin Next.js). Untuk Supabase live, set environment di Netlify dan apply migrasi lebih dahulu; SQLite lokal tidak cocok untuk filesystem serverless yang bisa sementara atau terpisah antar-instance. Build lokal sebelum deploy. Worker tetap dijalankan di host terpisah. Netlify CLI/deploy aktual tidak diklaim berhasil tanpa site/project Netlify yang terhubung.
 
 ## Push ke GitHub dengan aman (tanpa cookie/key)
 

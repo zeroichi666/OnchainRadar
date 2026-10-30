@@ -1,5 +1,7 @@
 {
   "nft": ["free mint NFT", "NFT mint", "GTD mint", "guaranteed mint", "allowlist NFT", "FCFS mint", "NFT collection launch", "mint date"],
   "meme": ["fair launch", "just launched token", "community takeover crypto", "CTO token", "dev abandoned token", "renounced token", "new meme coin", "Solana token launch", "Base meme coin"],
-  "narratives": ["AI agent crypto", "animal meme coin", "community revival token", "new crypto narrative"]
+  "narratives": ["AI agent crypto", "animal meme coin", "community revival token", "new crypto narrative"],
+  "games": ["web3 game launch", "onchain game playtest", "blockchain game beta", "web3 gaming alpha", "gamefi launch", "play to earn game update", "crypto game early access"],
+  "vps": ["free VPS", "VPS giveaway", "free virtual private server", "free cloud server", "VPS free trial", "VPS gratis"]
 }

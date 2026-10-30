@@ -21,7 +21,7 @@ const CHAIN_MARKERS = [
 const EVM_ADDRESS_RE = /\b0x[a-f0-9]{40}\b/gi;
 const SOLANA_CA_RE = /\b(?:ca|contract(?:\s+address)?|mint(?:\s+address)?)\s*[:=]\s*([1-9A-HJ-NP-Za-km-z]{32,44})\b/gi;
 const TICKER_RE = /\$([A-Z][A-Z0-9]{1,9})\b/gi;
-const CATEGORY_LABELS = { nft: "NFT mints", meme: "Meme coins", narratives: "Crypto narratives" };
+const CATEGORY_LABELS = { nft: "NFT mints", meme: "Meme coins", narratives: "Crypto narratives", games: "Web3 Games", vps: "Free VPS" };
 
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 const integerOrNull = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -127,10 +127,15 @@ export function selectSearches(config, maxSearches, offset = 0) {
   if (!groups.length) throw new Error("The X query configuration has no usable search terms.");
   const maximum = Math.max(1, Math.min(30, Math.floor(Number(maxSearches) || 3)));
   const startAt = Math.max(0, Math.floor(Number(offset) || 0));
-  const selected = [];
+  const priorityGroup = groups.find(([group]) => group === "vps");
+  const rotatingGroups = priorityGroup ? groups.filter(([group]) => group !== "vps") : groups;
+  const remainingSlots = Math.max(0, maximum - (priorityGroup ? 1 : 0));
+  const groupOffset = rotatingGroups.length > remainingSlots ? startAt % rotatingGroups.length : 0;
+  const orderedGroups = [...rotatingGroups.slice(groupOffset), ...rotatingGroups.slice(0, groupOffset)];
+  const selected = priorityGroup ? [{ group: priorityGroup[0], query: priorityGroup[1][startAt % priorityGroup[1].length] }] : [];
   for (let round = 0; selected.length < maximum; round += 1) {
     let addedThisRound = false;
-    for (const [group, terms] of groups) {
+    for (const [group, terms] of orderedGroups) {
       if (selected.length >= maximum) break;
       if (round >= terms.length) continue;
       selected.push({ group, query: terms[(startAt + round) % terms.length] });
@@ -180,6 +185,7 @@ function addUniquePost(target, post) {
 function makeTokenCandidates(postsByGroup, discoveredAt) {
   const candidates = new Map();
   for (const [group, posts] of postsByGroup) {
+    if (group === "vps") continue;
     for (const post of posts) {
       const chain = extractExplicitChain(post.text);
       if (!chain) continue;

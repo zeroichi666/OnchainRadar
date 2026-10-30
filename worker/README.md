@@ -51,7 +51,7 @@ Allowlist minimal yang dipakai adapter: `TWITTER_AUTH_TOKEN,TWITTER_CT0,TWITTER_
 
 ## Cara kerja adapter
 
-Adapter merotasi query dari `config/x-queries.json` antar kelompok NFT, meme, dan narasi. Ia hanya menerima respons JSON upstream dengan envelope `ok: true` dan `data: []`, membatasi hasil, menormalisasi field yang benar-benar ada (ID/text/URL/author/waktu/engagement), lalu mencetak tepat satu envelope JSON. Ia tidak membuat URL, metrik historis, NFT/GTD, atau security verdict. Kandidat token hanya dibuat bila tepat satu chain yang didukung, satu ticker, dan satu address eksplisit terdeteksi. Server tetap mengulang pemeriksaan security.
+Adapter membaca query dari `config/x-queries.json` untuk NFT, meme, narasi, Web3 Games, dan Free VPS. Dengan batas default tiga pencarian per run, satu slot diprioritaskan untuk query VPS dan dua slot lain berotasi; jumlah pencarian tidak bertambah. Hasil VPS menjadi posting X yang belum diverifikasi dan tidak diproses sebagai kandidat token atau direktori provider. Hasil game juga menjadi narasi bersumber X yang belum diverifikasi; ini bukan pemindaian kontrak on-chain atau audit keamanan game. Adapter hanya menerima respons JSON upstream dengan envelope `ok: true` dan `data: []`, membatasi hasil, menormalisasi field yang benar-benar ada (ID/text/URL/author/waktu/engagement), lalu mencetak tepat satu envelope JSON. Ia tidak membuat URL, metrik historis, NFT/GTD, atau security verdict. Kandidat token hanya dibuat bila tepat satu chain yang didukung, satu ticker, dan satu address eksplisit terdeteksi dari kategori selain VPS. Server tetap mengulang pemeriksaan security.
 
 `AGENT_REACH_SEARCH_DATE` memilih hari publikasi pada zona `Asia/Jakarta`, bukan tanggal mint yang diklaim. Batch gagal/unauthenticated tidak dikirim sebagai sync sukses. `eventId` memungkinkan retry idempotent.
 
@@ -70,7 +70,7 @@ node --env-file=.env.local worker/run-agent-reach.mjs
 
 Perintah satu kali tidak otomatis memuat `.env.local`; contoh di atas memuatnya melalui flag Node. Bila semua variabel sudah diberikan secret manager host, hilangkan `--env-file=.env.local`. Jangan memakai `source .env.local`: template memuat array JSON yang tidak ditujukan sebagai skrip shell.
 
-HTTP `localhost` hanya untuk test transport lokal; endpoint produksi harus HTTPS.
+Untuk live scan lokal dengan `STORAGE_PROVIDER=sqlite`, jalankan aplikasi Next.js pada loopback dan gunakan `INGESTION_URL=http://localhost:3000/api/ingest/social`; worker dan aplikasi perlu memakai `INGESTION_SECRET` yang sama. HTTP hanya untuk loopback lokal; endpoint produksi harus HTTPS.
 
 ## Scheduler 10 menit
 

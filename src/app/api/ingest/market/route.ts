@@ -5,7 +5,7 @@ import { isValidTokenAddress } from "@/lib/security";
 import { enrichCandidateBatch } from "@/lib/server/dexscreener";
 import { authorizeWorkerRequest } from "@/lib/server/ingestion-auth";
 import { readBoundedJson } from "@/lib/server/api-helpers";
-import { getSupabaseServerClient, readCandidatesByChainAddresses, upsertCandidate } from "@/lib/server/supabase";
+import { isStorageConfigured, readCandidatesByChainAddresses, upsertCandidate, upsertSyncState } from "@/lib/server/supabase";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const RequestSchema = z.object({ chain: ChainSchema, addresses: z.array(z.string().min(1).max(128)).min(1).max(30) }).strict();
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   let raw: unknown; try { raw = await readBoundedJson(request, 32_000); } catch (error) { return NextResponse.json({ error: error instanceof RangeError ? "Payload too large." : "Request body must be valid JSON." }, { status: error instanceof RangeError ? 413 : 400 }); }
   const parsed = RequestSchema.safeParse(raw); if (!parsed.success) return NextResponse.json({ error: "Request must contain a supported chain and 1–30 addresses." }, { status: 422 });
   if (parsed.data.addresses.some((address) => !isValidTokenAddress(parsed.data.chain, address))) return NextResponse.json({ error: "One or more addresses are invalid for the selected chain." }, { status: 422 });
-  const supabase = getSupabaseServerClient(); if (!supabase) return NextResponse.json({ error: "Supabase is not configured." }, { status: 503 });
+  if (!isStorageConfigured()) return NextResponse.json({ error: "Persistent storage is not configured." }, { status: 503 });
   try {
     const rows = await readCandidatesByChainAddresses(parsed.data.chain, parsed.data.addresses);
     const requested = new Set(parsed.data.addresses.map((address) => address.toLowerCase()));
@@ -23,8 +23,7 @@ export async function POST(request: Request) {
     if (!candidates.length) return NextResponse.json({ updated: 0, warnings: ["No matching stored candidates; arbitrary addresses are not inserted by market refresh."] }, { status: 200 });
     const result = await enrichCandidateBatch(candidates);
     await Promise.all(result.candidates.map((candidate) => upsertCandidate({ id: candidate.id, chain: candidate.chain, token_address: candidate.address ?? null, payload: candidate })));
-    const { error: syncError } = await supabase.from("radar_sync_state").upsert({ source: "dexscreener", last_successful_at: new Date().toISOString(), details: { updated: result.candidates.length } }, { onConflict: "source" });
-    if (syncError) throw new Error("Market sync state write failed");
+    await upsertSyncState("dexscreener", new Date().toISOString(), { updated: result.candidates.length });
     return NextResponse.json({ updated: result.candidates.length, warnings: result.warnings }, { headers: { "Cache-Control": "no-store" } });
   } catch { return NextResponse.json({ error: "Market refresh failed. Retry later." }, { status: 503 }); }
 }
