@@ -2,7 +2,7 @@ import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -69,5 +69,42 @@ describe("scheduled adapter runner", () => {
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /"accepted":true/);
     assert.equal(received.eventId, "adapter-ran-safely");
+  });
+
+  it("uses the default lock path when WORKER_LOCK_FILE is empty", async () => {
+    const dir = await mkdtemp(resolve(tmpdir(), "radar-worker-empty-lock-test-")); tempDirs.push(dir);
+    let received;
+    const endpoint = await listen((request, response) => {
+      let body = ""; request.on("data", (chunk) => body += chunk); request.on("end", () => { received = JSON.parse(body); response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ accepted: true })); });
+    });
+    const source = `process.stdout.write(JSON.stringify({ schemaVersion: 1, eventId: "empty-lock-test", source: "agent-reach", syncedAt: new Date().toISOString(), nfts: [], gtd: [], tokens: [], narratives: [] }));`;
+    const result = await runRunner({
+      INGESTION_URL: endpoint,
+      INGESTION_SECRET: "runner-secret",
+      AGENT_REACH_ADAPTER: process.execPath,
+      AGENT_REACH_ADAPTER_ARGS_JSON: JSON.stringify(["-e", source]),
+      WORKER_LOCK_FILE: "",
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /"accepted":true/);
+    assert.equal(received.eventId, "empty-lock-test");
+  });
+
+  it("skips a run when the configured lock file already exists", async () => {
+    const dir = await mkdtemp(resolve(tmpdir(), "radar-worker-held-lock-test-")); tempDirs.push(dir);
+    const lockPath = resolve(dir, "runner.lock");
+    const markerPath = resolve(dir, "adapter-ran");
+    await writeFile(lockPath, "");
+    const source = `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "ran");`;
+    const result = await runRunner({
+      INGESTION_URL: "http://127.0.0.1:1/api/ingest/social",
+      INGESTION_SECRET: "runner-secret",
+      AGENT_REACH_ADAPTER: process.execPath,
+      AGENT_REACH_ADAPTER_ARGS_JSON: JSON.stringify(["-e", source]),
+      WORKER_LOCK_FILE: lockPath,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { skipped: true, reason: "worker lock already held" });
+    await assert.rejects(access(markerPath));
   });
 });

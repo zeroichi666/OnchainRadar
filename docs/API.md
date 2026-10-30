@@ -41,6 +41,16 @@ Protected refresh body: `{"chain":"base","addresses":["0x..."]}`. Accepts 1–30
 
 Protected refresh body: `{"chain":"solana","address":"..."}`. The address must be valid and already stored as a candidate. The server calls its chain-appropriate security analyzer; submitted provider verdicts are not accepted. `202` means the result remains `UNKNOWN` and is not cleared into the main feed.
 
+## Protected scan-history deletion
+
+`DELETE /api/admin/scan-history` permanently clears all scan-derived rows from the active provider: candidates, NFT and GTD records, narratives, source posts, CTO evidence, security reports, sync-state rows, and ingestion-event IDs. The event IDs are removed so a later worker batch is not treated as an old duplicate. The browser's curated screening settings and watchlist are not stored in these tables and are not deleted. SQLite runs the clear in one transaction; Supabase uses the service-role-only `clear_scan_history()` RPC so the table deletes are atomic.
+
+The request must include `Authorization: Bearer <SCAN_HISTORY_DELETE_SECRET>`, an exact allowlisted `Origin`, and JSON body `{"confirmation":"HAPUS SEMUA RIWAYAT SCAN"}`. The UI asks the operator to type the phrase and enter the server secret for each deletion; it does not persist the secret. Use a separate random secret of at least 32 bytes, never `INGESTION_SECRET`, and configure `APP_ORIGIN` or `ALLOWED_INGEST_ORIGINS` for the exact site origin. Requests with no Origin are rejected. No wildcard CORS is enabled. The endpoint fails closed with `503` when the secret, Origin allowlist, live storage, or Supabase function is not configured.
+
+For an existing Supabase project, apply `supabase/migrations/202610300001_clear_scan_history.sql` before enabling this action. New projects using `supabase/schema.sql` receive the RPC in the bootstrap schema. Configure `SCAN_HISTORY_DELETE_SECRET` and the correct origin in the server environment (including Netlify environment variables, if used). Keep a database backup if recovery may be needed; deletion cannot be undone by the app.
+
+Success returns `{ "cleared": true, "provider": "sqlite|supabase", "records": { ... }, "syncState": n, "ingestionEvents": n }`. The response is `no-store`. Other relevant responses: `401` for invalid bearer secret, `403` for missing/disallowed Origin, `415` for non-JSON content, `422` when the exact confirmation is missing, `429` for rate limiting, and `503` for unavailable configuration or storage.
+
 ### Error/status behavior
 
 - `401`: missing/invalid bearer secret

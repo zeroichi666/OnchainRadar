@@ -80,7 +80,8 @@ async function main() {
     if (["INGESTION_SECRET", "SUPABASE_SERVICE_ROLE_KEY"].includes(name)) throw new Error(`${name} cannot be passed to the Agent-Reach adapter.`);
     if (process.env[name] != null) childEnv[name] = process.env[name];
   }
-  const lockPath = resolve(process.env.WORKER_LOCK_FILE ?? ".onchain-radar-worker.lock");
+  const configuredLockPath = process.env.WORKER_LOCK_FILE?.trim();
+  const lockPath = resolve(configuredLockPath || ".onchain-radar-worker.lock");
   const lock = await acquireLock(lockPath);
   if (!lock) { console.log(JSON.stringify({ skipped: true, reason: "worker lock already held" })); return; }
   try {

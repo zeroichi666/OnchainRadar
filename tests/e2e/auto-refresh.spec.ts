@@ -21,7 +21,7 @@ test("refresh occurs at ten minutes and keeps navigation, social date, and watch
   const updated = structuredClone(payload);
   updated.narratives[0].category = "Fresh source data";
   const calls = await openMockDashboard(page, payload, (n) => ({ body: n === 1 ? payload : updated }));
-  await page.getByRole("button", { name: "Free Mint", exact: true }).click();
+  await page.getByRole("button", { name: "Mint Scanner", exact: true }).click();
   await page.getByRole("button", { name: "Add to watchlist" }).first().click();
   await page.getByRole("button", { name: "X Narratives", exact: true }).click();
   await page.getByRole("button", { name: "All history", exact: true }).click();
@@ -62,7 +62,7 @@ test("manual refresh does not overlap a pending automatic request and timeout re
   const calls = await openMockDashboard(page, payload, (n) => n === 2 ? null : { body: payload });
   await page.clock.fastForward(600_000);
   await expect(page.getByRole("button", { name: "Refresh dashboard", exact: true })).toBeDisabled();
-  await page.getByRole("button", { name: "Free Mint", exact: true }).click();
+  await page.getByRole("button", { name: "Mint Scanner", exact: true }).click();
   expect(calls()).toBe(2);
   await page.clock.fastForward(60_000);
   await expect(page.locator("main").getByRole("alert")).toContainText("timed out");
@@ -107,7 +107,7 @@ test("a nonempty new snapshot replaces old records rather than blindly merging e
   const removedName = payload.nfts[0].name;
   updated.nfts = [];
   await openMockDashboard(page, payload, () => ({ body: updated }));
-  await page.getByRole("button", { name: "Free Mint", exact: true }).click();
+  await page.getByRole("button", { name: "Mint Scanner", exact: true }).click();
   await expect(page.getByRole("heading", { name: removedName, exact: true })).toBeVisible();
   await page.clock.fastForward(600_000);
   await expect(page.getByRole("status")).toContainText("Refresh complete");

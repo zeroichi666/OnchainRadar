@@ -47,7 +47,9 @@ Salin `.env.example` ke `.env.local` untuk Next.js lokal. Di Netlify, masukkan v
 - `SUPABASE_SERVICE_ROLE_KEY` — service role key hanya di server.
 - `INGESTION_SECRET` — secret kuat yang sama dengan worker.
 
-**Opsional:** `GOPLUS_ACCESS_TOKEN`, `SOLANA_RPC_URL` (default kode memakai public Solana endpoint), `SECURITY_TTL_SECONDS` (default kode 900), `MIN_LIQUIDITY_USD` (contoh `.env.example`: 5000), `APP_ORIGIN`, dan `ALLOWED_INGEST_ORIGINS`. `ALLOWED_INGEST_ORIGINS` dipakai sebagai allowlist origin bila diperlukan; endpoint ingestion tetap membutuhkan Bearer secret.
+**Hanya jika fitur hapus riwayat ingin diaktifkan:** `SCAN_HISTORY_DELETE_SECRET` — secret admin server-only yang berbeda, acak, minimal 32 byte; UI memintanya setiap kali operator menghapus seluruh riwayat scan.
+
+**Opsional:** `GOPLUS_ACCESS_TOKEN`, `SOLANA_RPC_URL` (default kode memakai public Solana endpoint), `SECURITY_TTL_SECONDS` (default kode 900), `MIN_LIQUIDITY_USD` (contoh `.env.example`: 5000), `APP_ORIGIN`, dan `ALLOWED_INGEST_ORIGINS`. `ALLOWED_INGEST_ORIGINS` mengizinkan Origin yang tepat untuk ingestion dan penghapusan riwayat; endpoint delete fail-closed bila secret atau allowlist tidak dikonfigurasi.
 
 ### Worker terpisah
 
@@ -70,6 +72,7 @@ DATA_MODE=live
 STORAGE_PROVIDER=sqlite
 SQLITE_DATABASE_PATH=.data/onchain-radar.sqlite
 INGESTION_SECRET=<secret-kuat-untuk-worker>
+SCAN_HISTORY_DELETE_SECRET=<secret-admin-acak-minimal-32-byte>
 ```
 
 Tidak perlu mengisi `SUPABASE_URL` atau `SUPABASE_SERVICE_ROLE_KEY` dalam mode ini. File database dibuat otomatis; path relatif dihitung dari root proyek. Direktori `.data/` (termasuk file WAL SQLite) dikecualikan dari Git. Ingestion tetap memerlukan `INGESTION_SECRET` dan Bearer authorization seperti mode Supabase. `STORAGE_PROVIDER` yang tidak diisi tetap memilih Supabase demi kompatibilitas.
@@ -80,8 +83,11 @@ SQLite lokal ditujukan untuk satu aplikasi pada mesin lokal atau host mandiri de
 
 1. Buat project Supabase.
 2. Jalankan [`supabase/migrations/202610170001_initial.sql`](supabase/migrations/202610170001_initial.sql), atau gunakan [`supabase/schema.sql`](supabase/schema.sql) pada project baru.
-3. Pastikan RLS aktif dan tidak menambahkan policy publik untuk service-role data.
-4. Isi variabel Next.js di atas, jalankan aplikasi, lalu lakukan ingest dari worker. Live tidak dianggap aktif hanya karena variabel sudah diisi; harus ada batch worker sukses yang tercatat.
+3. Pada project yang sudah ada, jalankan [`supabase/migrations/202610300001_clear_scan_history.sql`](supabase/migrations/202610300001_clear_scan_history.sql) untuk menambahkan RPC delete atomik; project baru yang memakai schema bootstrap sudah menyertakannya.
+4. Pastikan RLS aktif dan tidak menambahkan policy publik untuk service-role data.
+5. Isi variabel Next.js di atas, jalankan aplikasi, lalu lakukan ingest dari worker. Live tidak dianggap aktif hanya karena variabel sudah diisi; harus ada batch worker sukses yang tercatat.
+
+Pada halaman **Settings**, panel danger zone hanya aktif di mode live. Penghapusan meminta operator mengetik `HAPUS SEMUA RIWAYAT SCAN` dan memasukkan `SCAN_HISTORY_DELETE_SECRET`; seluruh scan history dan status sync/ingest pada provider aktif terhapus, sedangkan setting dan watchlist browser tetap ada. Siapkan backup terlebih dahulu jika perlu pemulihan. Untuk hosting publik, atur secret dan allowlist Origin yang tepat; tanpa keduanya endpoint menolak permintaan.
 
 ## Demo, refresh, dan worker
 

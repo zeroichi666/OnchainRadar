@@ -18,9 +18,10 @@ import { AUTO_REFRESH_MS, DASHBOARD_TIMEOUT_MS, hasDashboardRecords } from "@/li
 import { SocialReviewSection } from "@/components/social-review-queue";
 import { Web3GamesBoard } from "@/components/web3-games-board";
 import { FreeVpsBoard } from "@/components/free-vps-board";
+import { ScanHistoryDangerZone } from "@/components/scan-history-danger-zone";
 
 const navItems = [
-  { name: "Overview", icon: Home }, { name: "Free Mint", icon: Sparkles }, { name: "GTD Mint", icon: Target },
+  { name: "Overview", icon: Home }, { name: "Mint Scanner", icon: Layers3 },
   { name: "Meme Coins", icon: Flame }, { name: "Web3 Games", icon: Gamepad2 }, { name: "Free VPS", icon: Server }, { name: "Community Takeover", icon: UsersIcon }, { name: "X Narratives", icon: TrendingUp },
   { name: "Security Review", icon: ShieldAlert }, { name: "Watchlist", icon: Bookmark }, { name: "Settings", icon: Settings2 },
 ];
@@ -112,6 +113,87 @@ function MonthCalendar({ dates, onChoose }: { dates: string[]; onChoose: (date: 
   const cells: (number | null)[] = [...Array(firstDay).fill(null), ...Array.from({ length: days }, (_, index) => index + 1)];
   return <Card><CardHeader><div><CardTitle>Mint calendar</CardTitle><p className="mt-1 text-xs text-slate-500">Scheduled times are interpreted and displayed in UTC.</p></div><div className="flex gap-1"><Button size="icon" variant="ghost" onClick={() => setMonth(new Date(year, monthIndex - 1, 1))} aria-label="Previous month"><ChevronLeft size={15}/></Button><Button size="icon" variant="ghost" onClick={() => setMonth(new Date(year, monthIndex + 1, 1))} aria-label="Next month"><ChevronRight size={15}/></Button></div></CardHeader><CardContent><div className="mb-2 text-center text-sm font-medium text-slate-200">{month.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" })}</div><div className="grid grid-cols-7 gap-1 text-center">{["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => <div key={day} className="py-2 text-[10px] uppercase text-slate-600">{day}</div>)}{cells.map((day, index) => { const date = day ? new Date(Date.UTC(year, monthIndex, day)).toISOString().slice(0, 10) : ""; const count = date ? counts.get(date) ?? 0 : 0; return <button key={`${date}-${index}`} disabled={!day} onClick={() => { setSelected(date); onChoose(date); }} className={`min-h-12 rounded-lg text-xs transition ${!day ? "" : selected === date ? "bg-emerald-300 text-[#08110d]" : count ? "border border-emerald-300/20 bg-emerald-300/[0.07] text-emerald-100 hover:bg-emerald-300/15" : "text-slate-400 hover:bg-white/[0.05]"}`}><span>{day ?? ""}</span>{count > 0 && <span className="mt-0.5 block text-[9px] opacity-75">{count} event{count > 1 ? "s" : ""}</span>}</button>; })}</div></CardContent></Card>;
 }
+
+type MintCandidate = { type: "free"; row: NftOpportunity } | { type: "gtd"; row: GtdOpportunity };
+
+function MintScannerBoard({ nfts, gtd, saved, toggleSave }: { nfts: NftOpportunity[]; gtd: GtdOpportunity[]; saved: string[]; toggleSave: (id: string) => void }) {
+  const [category, setCategory] = useState<"all" | "free" | "gtd">("all");
+  const [view, setView] = useState<"table" | "calendar">("table");
+  const [chain, setChain] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [verification, setVerification] = useState("all");
+  const [eligibility, setEligibility] = useState("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [selectedDate, setSelectedDate] = useState("");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const candidates: MintCandidate[] = [
+    ...nfts.filter((item) => ["free", "conditional-free", "low-cost", "unknown"].includes(item.kind)).map((row) => ({ type: "free" as const, row })),
+    ...gtd.map((row) => ({ type: "gtd" as const, row })),
+  ];
+  const categoryRows = category === "all" ? candidates : candidates.filter((item) => item.type === category);
+  const filtered = categoryRows.filter(({ type, row }) => {
+    const chainMatch = chain === "all" || row.chain === chain;
+    const rowStatus = row.status;
+    const statusMatch = status === "all" || rowStatus === status;
+    const verificationValue = type === "free" ? row.securityStatus : row.status;
+    const verificationMatch = verification === "all" || verificationValue === verification;
+    const eligibilityValue = type === "free" ? (row.eligibilityType ?? "unknown") : (row.eligibility ? "conditional" : "unknown");
+    const eligibilityMatch = eligibility === "all" || eligibilityValue === eligibility;
+    const date = row.mintAt ? Date.parse(row.mintAt) : null;
+    const fromMatch = !from || (date != null && date >= Date.parse(`${from}T00:00:00Z`));
+    const toMatch = !to || (date != null && date <= Date.parse(`${to}T23:59:59Z`));
+    const selectedMatch = !selectedDate || row.mintAt?.slice(0, 10) === selectedDate;
+    return chainMatch && statusMatch && verificationMatch && eligibilityMatch && fromMatch && toMatch && selectedMatch;
+  });
+  const sorted = [...filtered].sort((a, b) => {
+    const direction = sortOrder === "asc" ? 1 : -1;
+    const aDate = a.row.mintAt ? Date.parse(a.row.mintAt) : Number.NaN;
+    const bDate = b.row.mintAt ? Date.parse(b.row.mintAt) : Number.NaN;
+    const aHasSchedule = Number.isFinite(aDate);
+    const bHasSchedule = Number.isFinite(bDate);
+    if (aHasSchedule && bHasSchedule) return (aDate - bDate) * direction;
+    if (aHasSchedule) return -1;
+    if (bHasSchedule) return 1;
+
+    const aHistory = a.type === "free"
+      ? Date.parse(a.row.lastVerifiedAt ?? a.row.discoveredAt)
+      : Date.parse(a.row.lastCheckedAt);
+    const bHistory = b.type === "free"
+      ? Date.parse(b.row.lastVerifiedAt ?? b.row.discoveredAt)
+      : Date.parse(b.row.lastCheckedAt);
+    if (!Number.isFinite(aHistory) && !Number.isFinite(bHistory)) return a.row.name.localeCompare(b.row.name);
+    if (!Number.isFinite(aHistory)) return 1;
+    if (!Number.isFinite(bHistory)) return -1;
+    return (aHistory - bHistory) * direction;
+  });
+  const statusOptions = ["upcoming", "live", "ended", "unverified", "officially-confirmed", "third-party-reported", "expired", "potentially-misleading"];
+  const verificationOptions = ["verified", "unverified", "pending", "not-applicable", "officially-confirmed", "third-party-reported"];
+  return <>
+    <PageHeading eyebrow="NFT discovery and allocation intelligence" title="Mint Scanner" description="Free and low-cost mints and GTD allocations in one feed. Filter by category or combine both; official GTD labels still require verified project evidence." action={<div className="flex gap-2"><Button variant={view === "table" ? "primary" : "secondary"} size="sm" onClick={() => setView("table")}><Grid2X2 size={14}/>Table</Button><Button variant={view === "calendar" ? "primary" : "secondary"} size="sm" onClick={() => setView("calendar")}><CalendarDays size={14}/>Calendar</Button></div>}/>
+    <div role="group" aria-label="Mint category" className="mb-4 flex flex-wrap gap-2">
+      <Button size="sm" variant={category === "all" ? "primary" : "secondary"} aria-pressed={category === "all"} onClick={() => setCategory("all")}>All Mints</Button>
+      <Button size="sm" variant={category === "free" ? "primary" : "secondary"} aria-pressed={category === "free"} onClick={() => setCategory("free")}>Free Mint</Button>
+      <Button size="sm" variant={category === "gtd" ? "primary" : "secondary"} aria-pressed={category === "gtd"} onClick={() => setCategory("gtd")}>GTD Mint</Button>
+    </div>
+    <Card className="mb-5"><CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-7">
+      <Select aria-label="Chain" value={chain} onChange={(e) => setChain(e.target.value)}><option value="all">All chains</option>{chainOptions.map((c) => <option key={c} value={c}>{chainLabel(c)}</option>)}</Select>
+      <Select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">All statuses</option>{statusOptions.map((value) => <option key={value} value={value}>{value.replaceAll("-", " ")}</option>)}</Select>
+      <Select aria-label="Verification" value={verification} onChange={(e) => setVerification(e.target.value)}><option value="all">All verification</option>{verificationOptions.map((value) => <option key={value} value={value}>{value.replaceAll("-", " ")}</option>)}</Select>
+      <Select aria-label="Eligibility" value={eligibility} onChange={(e) => setEligibility(e.target.value)}><option value="all">All eligibility</option>{["public", "allowlist", "whitelist", "fcfs", "raffle", "conditional", "giveaway", "unknown"].map((value) => <option key={value} value={value}>{value}</option>)}</Select>
+      <Input type="date" aria-label="From date" value={from} onChange={(e) => setFrom(e.target.value)}/>
+      <Input type="date" aria-label="To date" value={to} onChange={(e) => setTo(e.target.value)}/>
+      <Select aria-label="Sort schedule and scan history" value={sortOrder} onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}><option value="asc">Ascending · earliest schedule / oldest scan</option><option value="desc">Descending · latest schedule / newest scan</option></Select>
+    </CardContent></Card>
+    {view === "calendar" && <div className="mb-5"><MonthCalendar dates={filtered.flatMap(({ row }) => row.mintAt ? [row.mintAt] : [])} onChoose={setSelectedDate}/></div>}
+    <div className="mb-3 flex items-center justify-between text-xs text-slate-500"><span>{filtered.length} record{filtered.length === 1 ? "" : "s"} · {view === "calendar" ? "Calendar + matching opportunities" : "Table view"}</span>{selectedDate && <Button variant="ghost" size="sm" onClick={() => setSelectedDate("")}>Clear selected date <X size={12}/></Button>}</div>
+    {filtered.length ? <div className="space-y-3">{sorted.map(({ type, row }) => {
+      const key = `${type}:${row.id}`;
+      return <div key={key} className="space-y-1"><div className="px-1"><Pill tone={type === "gtd" ? "purple" : "blue"}>{type === "gtd" ? "GTD Mint" : "Free Mint"}</Pill></div><OpportunityCard row={row} isGtd={type === "gtd"} saved={saved.includes(key)} onToggle={() => toggleSave(key)}/></div>;
+    })}</div> : <EmptyState icon={category === "gtd" ? Target : Sparkles} title="No matching opportunities" detail="No records match the current filters. Empty live data is not replaced with invented mint schedules."/>}
+  </>;
+}
+
 function MintBoard({ mode, nfts, gtd, saved, toggleSave }: { mode: "free" | "gtd"; nfts: NftOpportunity[]; gtd: GtdOpportunity[]; saved: string[]; toggleSave: (id: string) => void }) {
   const [view, setView] = useState<"table" | "calendar">("table");
   const [chain, setChain] = useState("all");
@@ -121,6 +203,7 @@ function MintBoard({ mode, nfts, gtd, saved, toggleSave }: { mode: "free" | "gtd
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const rows = mode === "free" ? nfts.filter((item) => ["free", "conditional-free", "low-cost", "unknown"].includes(item.kind)) : gtd;
   const filtered = rows.filter((row) => {
     const d = row as NftOpportunity;
@@ -136,8 +219,29 @@ function MintBoard({ mode, nfts, gtd, saved, toggleSave }: { mode: "free" | "gtd
     const selectedMatch = !selectedDate || (row.mintAt?.slice(0, 10) === selectedDate);
     return chainMatch && statusMatch && verificationMatch && eligibilityMatch && fromMatch && toMatch && selectedMatch;
   });
+  const sorted = [...filtered].sort((a, b) => {
+    const direction = sortOrder === "asc" ? 1 : -1;
+    const aDate = a.mintAt ? Date.parse(a.mintAt) : Number.NaN;
+    const bDate = b.mintAt ? Date.parse(b.mintAt) : Number.NaN;
+    const aHasSchedule = Number.isFinite(aDate);
+    const bHasSchedule = Number.isFinite(bDate);
+    if (aHasSchedule && bHasSchedule) return (aDate - bDate) * direction;
+    if (aHasSchedule) return -1;
+    if (bHasSchedule) return 1;
+
+    const aHistory = mode === "free"
+      ? Date.parse((a as NftOpportunity).lastVerifiedAt ?? (a as NftOpportunity).discoveredAt)
+      : Date.parse((a as GtdOpportunity).lastCheckedAt);
+    const bHistory = mode === "free"
+      ? Date.parse((b as NftOpportunity).lastVerifiedAt ?? (b as NftOpportunity).discoveredAt)
+      : Date.parse((b as GtdOpportunity).lastCheckedAt);
+    if (!Number.isFinite(aHistory) && !Number.isFinite(bHistory)) return a.name.localeCompare(b.name);
+    if (!Number.isFinite(aHistory)) return 1;
+    if (!Number.isFinite(bHistory)) return -1;
+    return (aHistory - bHistory) * direction;
+  });
   const title = mode === "free" ? "Free Mint Scanner" : "GTD Mint Scanner";
-  return <><PageHeading eyebrow={mode === "free" ? "NFT discovery" : "Guaranteed allocation intelligence"} title={title} description={mode === "free" ? "Free and low-cost mints are classified from normalized price and eligibility data; unknown prices are never shown as free." : "An official GTD label requires a verified official-project source link; ordinary allowlists remain unverified."} action={<div className="flex gap-2"><Button variant={view === "table" ? "primary" : "secondary"} size="sm" onClick={() => setView("table")}><Grid2X2 size={14}/>Table</Button><Button variant={view === "calendar" ? "primary" : "secondary"} size="sm" onClick={() => setView("calendar")}><CalendarDays size={14}/>Calendar</Button></div>}/><Card className="mb-5"><CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-6"><Select aria-label="Chain" value={chain} onChange={(e) => setChain(e.target.value)}><option value="all">All chains</option>{chainOptions.map((c) => <option key={c} value={c}>{chainLabel(c)}</option>)}</Select><Select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">All statuses</option>{(mode === "free" ? ["upcoming", "live", "ended", "unverified"] : ["officially-confirmed", "third-party-reported", "unverified", "expired", "potentially-misleading"]).map((s) => <option key={s} value={s}>{s.replaceAll("-", " ")}</option>)}</Select><Select aria-label="Verification" value={verification} onChange={(e) => setVerification(e.target.value)}><option value="all">All verification</option>{(mode === "free" ? ["verified", "unverified", "pending", "not-applicable"] : ["officially-confirmed", "third-party-reported", "unverified"]).map((s) => <option key={s} value={s}>{s.replaceAll("-", " ")}</option>)}</Select><Select aria-label="Eligibility" value={eligibility} onChange={(e) => setEligibility(e.target.value)}><option value="all">All eligibility</option>{["public", "allowlist", "whitelist", "fcfs", "raffle", "conditional", "unknown"].map((s) => <option key={s} value={s}>{s}</option>)}</Select><Input type="date" aria-label="From date" value={from} onChange={(e) => setFrom(e.target.value)}/><Input type="date" aria-label="To date" value={to} onChange={(e) => setTo(e.target.value)}/></CardContent></Card>{view === "calendar" && <div className="mb-5"><MonthCalendar dates={filtered.flatMap((row) => row.mintAt ? [row.mintAt] : [])} onChoose={setSelectedDate}/></div>}<div className="mb-3 flex items-center justify-between text-xs text-slate-500"><span>{filtered.length} record{filtered.length === 1 ? "" : "s"} · {view === "calendar" ? "Calendar + matching opportunities" : "Table view"}</span>{selectedDate && <Button variant="ghost" size="sm" onClick={() => setSelectedDate("")}>Clear selected date <X size={12}/></Button>}</div>{filtered.length ? <div className="space-y-3">{filtered.map((row) => { const key = `${mode}:${row.id}`; return <OpportunityCard key={key} row={row} isGtd={mode === "gtd"} saved={saved.includes(key)} onToggle={() => toggleSave(key)}/>; })}</div> : <EmptyState icon={mode === "free" ? Sparkles : Target} title="No matching opportunities" detail="No records match the current filters. Empty live data is not replaced with invented mint schedules."/>}</>;
+  return <><PageHeading eyebrow={mode === "free" ? "NFT discovery" : "Guaranteed allocation intelligence"} title={title} description={mode === "free" ? "Free and low-cost mints are classified from normalized price and eligibility data; unknown prices are never shown as free." : "An official GTD label requires a verified official-project source link; ordinary allowlists remain unverified."} action={<div className="flex gap-2"><Button variant={view === "table" ? "primary" : "secondary"} size="sm" onClick={() => setView("table")}><Grid2X2 size={14}/>Table</Button><Button variant={view === "calendar" ? "primary" : "secondary"} size="sm" onClick={() => setView("calendar")}><CalendarDays size={14}/>Calendar</Button></div>}/><Card className="mb-5"><CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-7"><Select aria-label="Chain" value={chain} onChange={(e) => setChain(e.target.value)}><option value="all">All chains</option>{chainOptions.map((c) => <option key={c} value={c}>{chainLabel(c)}</option>)}</Select><Select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)}><option value="all">All statuses</option>{(mode === "free" ? ["upcoming", "live", "ended", "unverified"] : ["officially-confirmed", "third-party-reported", "unverified", "expired", "potentially-misleading"]).map((s) => <option key={s} value={s}>{s.replaceAll("-", " ")}</option>)}</Select><Select aria-label="Verification" value={verification} onChange={(e) => setVerification(e.target.value)}><option value="all">All verification</option>{(mode === "free" ? ["verified", "unverified", "pending", "not-applicable"] : ["officially-confirmed", "third-party-reported", "unverified"]).map((s) => <option key={s} value={s}>{s.replaceAll("-", " ")}</option>)}</Select><Select aria-label="Eligibility" value={eligibility} onChange={(e) => setEligibility(e.target.value)}><option value="all">All eligibility</option>{["public", "allowlist", "whitelist", "fcfs", "raffle", "conditional", "unknown"].map((s) => <option key={s} value={s}>{s}</option>)}</Select><Input type="date" aria-label="From date" value={from} onChange={(e) => setFrom(e.target.value)}/><Input type="date" aria-label="To date" value={to} onChange={(e) => setTo(e.target.value)}/><Select aria-label="Sort schedule and scan history" value={sortOrder} onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}><option value="asc">Ascending · earliest schedule / oldest scan</option><option value="desc">Descending · latest schedule / newest scan</option></Select></CardContent></Card>{view === "calendar" && <div className="mb-5"><MonthCalendar dates={filtered.flatMap((row) => row.mintAt ? [row.mintAt] : [])} onChoose={setSelectedDate}/></div>}<div className="mb-3 flex items-center justify-between text-xs text-slate-500"><span>{filtered.length} record{filtered.length === 1 ? "" : "s"} · {view === "calendar" ? "Calendar + matching opportunities" : "Table view"}</span>{selectedDate && <Button variant="ghost" size="sm" onClick={() => setSelectedDate("")}>Clear selected date <X size={12}/></Button>}</div>{filtered.length ? <div className="space-y-3">{sorted.map((row) => { const key = `${mode}:${row.id}`; return <OpportunityCard key={key} row={row} isGtd={mode === "gtd"} saved={saved.includes(key)} onToggle={() => toggleSave(key)}/>; })}</div> : <EmptyState icon={mode === "free" ? Sparkles : Target} title="No matching opportunities" detail="No records match the current filters. Empty live data is not replaced with invented mint schedules."/>}</>;
 }
 
 function MemeTable({ tokens, reports, saved, toggleSave }: { tokens: TokenCandidate[]; reports: SecurityReport[]; saved: string[]; toggleSave: (id: string) => void }) {
@@ -228,9 +332,9 @@ export function RadarDashboard() {
   const mountedRef = useRef(false);
   const [refreshNote, setRefreshNote] = useState("");
 
-  async function loadDashboard(nextSettings: RadarClientSettings, isRefresh = false) {
+  async function loadDashboard(nextSettings: RadarClientSettings, isRefresh = false, acceptEmptySnapshot = false) {
     const key = JSON.stringify(nextSettings);
-    if (pendingRef.current?.key === key) return;
+    if (pendingRef.current?.key === key && !acceptEmptySnapshot) return;
     pendingRef.current?.controller.abort();
     const controller = new AbortController();
     pendingRef.current = { controller, key };
@@ -245,7 +349,7 @@ export function RadarDashboard() {
       if (!parsed.success) throw new Error("The server returned data that does not match the dashboard schema.");
       if (controller.signal.aborted || !mountedRef.current || pendingRef.current?.controller !== controller) return;
       // Do not union approved tokens across snapshots: a newer security verdict may revoke approval.
-      if (dataRef.current?.mode === parsed.data.mode && hasDashboardRecords(dataRef.current) && !hasDashboardRecords(parsed.data)) {
+      if (!acceptEmptySnapshot && dataRef.current?.mode === parsed.data.mode && hasDashboardRecords(dataRef.current) && !hasDashboardRecords(parsed.data)) {
         setRefreshNote("No records returned. Showing the previous snapshot; it may be out of date. Retrying automatically in 10 minutes.");
       } else {
         dataRef.current = parsed.data;
@@ -316,8 +420,7 @@ export function RadarDashboard() {
         {error && <div role="alert" className="mb-4 flex items-center gap-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-4 text-sm text-rose-200"><AlertTriangle size={16}/>{error}<Button className="ml-auto" size="sm" variant="ghost" onClick={() => void loadDashboard(settings, true)}>Retry</Button></div>}
         {loading && !data ? <div className="space-y-4"><div className="h-8 w-64 animate-pulse rounded bg-white/[0.05]"/><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 8 }, (_, i) => <div key={i} className="h-28 animate-pulse rounded-2xl border border-white/[0.04] bg-white/[0.02]"/>)}</div><div className="h-64 animate-pulse rounded-2xl border border-white/[0.04] bg-white/[0.02]"/></div> : !data ? <EmptyState icon={Activity} title="Dashboard unavailable" detail="No cached dataset could be loaded. Check your server configuration or retry."/> : <>
           {active === "Overview" && <OverviewBoard data={data} health={health}/>}
-          {active === "Free Mint" && <><MintBoard mode="free" nfts={data.nfts} gtd={data.gtd} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="free-mint"/></>}
-          {active === "GTD Mint" && <><MintBoard mode="gtd" nfts={data.nfts} gtd={data.gtd} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="gtd-mint"/></>}
+          {active === "Mint Scanner" && <><MintScannerBoard nfts={data.nfts} gtd={data.gtd} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="free-mint"/><SocialReviewSection items={data.socialReviewQueue} area="gtd-mint"/></>}
           {active === "Meme Coins" && <><MemeTable tokens={data.tokens} reports={data.securityReports} saved={watchlist} toggleSave={toggleWatch}/><SocialReviewSection items={data.socialReviewQueue} area="meme-coin"/></>}
           {active === "Web3 Games" && <Web3GamesBoard narratives={data.narratives.filter((item) => item.category === "Web3 Games")}/>}
           {active === "Free VPS" && <FreeVpsBoard narratives={data.narratives.filter((item) => item.category === "Free VPS")}/>}
@@ -325,7 +428,7 @@ export function RadarDashboard() {
           {active === "X Narratives" && <><NarrativeBoard narratives={data.narratives}/><SocialReviewSection items={data.socialReviewQueue} area="all"/></>}
           {active === "Security Review" && <SecurityBoard queue={data.securityQueue} reports={data.securityReports} exclusions={data.recentExclusions}/>}
           {active === "Watchlist" && <WatchlistBoard data={data} saved={watchlist} toggleSave={toggleWatch}/>}
-          {active === "Settings" && <SettingsBoard settings={settings} onSave={saveSettings}/>}
+          {active === "Settings" && <><SettingsBoard settings={settings} onSave={saveSettings}/><ScanHistoryDangerZone enabled={data.mode === "live"} onCleared={() => { void loadDashboard(settings, true, true); void loadHealth(); }}/></>}
         </>}
         <footer className="mt-10 border-t border-white/[0.05] pt-4 text-[10px] text-slate-700"><div className="flex flex-wrap items-center justify-between gap-2"><span>Onchain Radar · Data is informational, not financial advice.</span><span className="flex items-center gap-2"><Shield size={11}/>No wallet connection or transactions</span></div></footer>
       </main>

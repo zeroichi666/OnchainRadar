@@ -8,6 +8,7 @@ import { normalizeDatabaseTimestamp } from "@/lib/server/timestamps";
 import { buildSocialPostRows, mergeNarrativeHistory, mergeTokenCandidateHistory } from "@/lib/server/social-persistence";
 import { mergeSocialPosts } from "@/lib/social-review";
 import {
+  clearSqliteScanHistory,
   commitSqliteIngestionIfNew,
   getSqliteDatabase,
   getSqliteDatabasePath,
@@ -17,6 +18,7 @@ import {
   readSqlitePayloadRowsByIds,
   readSqlitePayloadTable,
   readSqliteSecurityReports,
+  type ScanHistoryClearResult,
   upsertSqliteRecord,
   writeSqliteSyncState,
 } from "@/lib/server/sqlite-storage";
@@ -69,6 +71,18 @@ export function getStorageStatus(): StorageStatus {
 
 export function isStorageConfigured(): boolean {
   return getStorageStatus().configured;
+}
+
+export async function clearScanHistory(): Promise<ScanHistoryClearResult> {
+  if (process.env.DATA_MODE !== "live") throw new Error("Scan history deletion requires DATA_MODE=live.");
+  if (getStorageProvider() === "sqlite") return clearSqliteScanHistory();
+
+  const { data, error } = await requireSupabase().rpc("clear_scan_history");
+  if (error) throw new Error(`Supabase scan history clear failed: ${error.message}`);
+  if (!data || typeof data !== "object" || !("records" in data)) {
+    throw new Error("Supabase scan history clear returned an invalid result.");
+  }
+  return data as ScanHistoryClearResult;
 }
 
 function requireSupabase(): SupabaseClient {

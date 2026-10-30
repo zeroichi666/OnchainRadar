@@ -4,7 +4,7 @@ test("dashboard visibly labels demo mode and navigation changes the active view"
   await page.goto("/");
   await expect(page.locator("header").getByText("demo", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Overview" })).toBeVisible();
-  for (const section of ["Free Mint", "GTD Mint", "Meme Coins", "Web3 Games", "Community Takeover", "X Narratives", "Security Review", "Watchlist", "Settings"]) {
+  for (const section of ["Mint Scanner", "Meme Coins", "Web3 Games", "Community Takeover", "X Narratives", "Security Review", "Watchlist", "Settings"]) {
     await page.getByRole("button", { name: section }).click();
     await expect(page.locator("header").getByText(section, { exact: true })).toBeVisible();
   }
@@ -18,6 +18,41 @@ test("mobile navigation opens and selects a section", async ({ page }) => {
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Security Review" }).click();
   await expect(page.getByRole("heading", { name: "Security Review", exact: true })).toBeVisible();
+});
+
+test("scan history deletion requires the explicit phrase and server secret in Settings", async ({ page, request }) => {
+  const response = await request.get("/api/dashboard");
+  const payload = await response.json();
+  payload.mode = "live";
+  await page.route("**/api/dashboard**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) }));
+  let deleteCalls = 0;
+  await page.route("**/api/admin/scan-history", async (route) => {
+    deleteCalls += 1;
+    expect(route.request().method()).toBe("DELETE");
+    expect(route.request().headers().authorization).toBe("Bearer test-secret-for-ui-confirmation");
+    expect(route.request().postDataJSON()).toEqual({ confirmation: "HAPUS SEMUA RIWAYAT SCAN" });
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ cleared: true, provider: "sqlite", records: {}, syncState: 0, ingestionEvents: 0 }) });
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem("onchain-radar.settings.v1", JSON.stringify({ marker: "keep-settings" }));
+    localStorage.setItem("onchain-radar.watchlist.v1", JSON.stringify(["manual:keep-watchlist"]));
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Hapus semua riwayat scan" }).click();
+  const submit = page.getByRole("button", { name: "Konfirmasi dan hapus permanen" });
+  await expect(submit).toBeDisabled();
+  await page.getByRole("textbox", { name: /Ketik HAPUS SEMUA RIWAYAT SCAN/ }).fill("HAPUS SEMUA RIWAYAT SCAN");
+  await expect(submit).toBeDisabled();
+  await page.getByLabel("Secret admin server").fill("test-secret-for-ui-confirmation");
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  await expect(page.locator("p[role='status']")).toContainText("berhasil dihapus");
+  expect(deleteCalls).toBe(1);
+  await expect.poll(() => page.evaluate(() => [localStorage.getItem("onchain-radar.settings.v1"), localStorage.getItem("onchain-radar.watchlist.v1")])).toEqual([
+    JSON.stringify({ marker: "keep-settings" }),
+    JSON.stringify(["manual:keep-watchlist"]),
+  ]);
 });
 
 test("read APIs return explicit demo payloads and validate query/address inputs", async ({ request }) => {
@@ -48,7 +83,7 @@ test("read APIs return explicit demo payloads and validate query/address inputs"
   expect((await request.get("/api/dashboard?socialDate=2026-02-29")).status()).toBe(400);
 });
 
-test("detected X claim groups show actual source links in Free Mint, GTD, Meme Coins, CTO, and narratives", async ({ page, request }) => {
+test("detected X claim groups show actual source links in the combined mint page, Meme Coins, CTO, and narratives", async ({ page, request }) => {
   await page.clock.install({ time: new Date("2026-10-17T12:00:00.000Z") });
   const response = await request.get("/api/dashboard");
   const payload = await response.json();
@@ -82,14 +117,15 @@ test("detected X claim groups show actual source links in Free Mint, GTD, Meme C
   await page.route("**/api/dashboard**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) }));
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Free Mint" }).click();
+  await page.getByRole("button", { name: "Mint Scanner", exact: true }).click();
+  await page.getByRole("button", { name: "Free Mint", exact: true }).click();
   const free = page.getByRole("region", { name: "Free Mint claim detected" });
   await expect(free.getByLabel("Filter social posts by date (WIB)")).toHaveValue("2026-10-17");
   await expect(free).toContainText("Detected claim · wording only");
   await expect(free.getByRole("link", { name: "Open original X post" })).toHaveAttribute("href", "https://x.com/Jennifer_Verse/status/2111410627348509162");
   await expect(page.getByText("No matching opportunities")).toBeVisible();
 
-  await page.getByRole("button", { name: "GTD Mint" }).click();
+  await page.getByRole("button", { name: "GTD Mint", exact: true }).click();
   const gtd = page.getByRole("region", { name: "GTD Mint claim detected" });
   await expect(gtd).toContainText("GTD wording detected");
   await expect(gtd.getByRole("link", { name: "Open original X post" })).toHaveCount(2);
@@ -137,4 +173,42 @@ test("Web3 Games displays source-linked X signals and supports search and chain 
 test("social ingestion cannot be used without valid worker credentials", async ({ request }) => {
   const response = await request.post("/api/ingest/social", { data: { schemaVersion: 1 } });
   expect([401, 503]).toContain(response.status());
+});
+
+test("combined mint scanner preserves category filters and schedule/history sorting", async ({ page, request }) => {
+  const response = await request.get("/api/dashboard");
+  const payload = await response.json();
+  const opportunity = (id: string, name: string, mintAt?: string, lastVerifiedAt?: string) => ({
+    id, name, chain: "ethereum", sourcePosts: [], discoveredAt: "2026-10-01T00:00:00.000Z", ...(lastVerifiedAt ? { lastVerifiedAt } : {}),
+    ...(mintAt ? { mintAt } : {}), status: "upcoming", kind: "free", mintPriceUsd: 0,
+    securityStatus: "verified", confidence: 90, demo: false,
+  });
+  payload.nfts = [
+    opportunity("later", "Later Mint", "2026-11-02T00:00:00.000Z"),
+    opportunity("undated-old", "Unscheduled Mint · older scan", undefined, "2026-10-02T00:00:00.000Z"),
+    opportunity("undated-new", "Unscheduled Mint · latest scan", undefined, "2026-10-03T00:00:00.000Z"),
+    opportunity("earlier", "Earlier Mint", "2026-11-01T00:00:00.000Z"),
+  ];
+  payload.gtd = [
+    { id: "gtd-later", name: "Later GTD", chain: "ethereum", sourcePosts: [], mintAt: "2026-11-02T00:00:00.000Z", status: "officially-confirmed", conditions: [], lastCheckedAt: "2026-10-01T00:00:00.000Z", confidence: 90, demo: false },
+    { id: "gtd-earlier", name: "Earlier GTD", chain: "ethereum", sourcePosts: [], mintAt: "2026-11-01T00:00:00.000Z", status: "officially-confirmed", conditions: [], lastCheckedAt: "2026-10-01T00:00:00.000Z", confidence: 90, demo: false },
+    { id: "gtd-undated-old", name: "Unscheduled GTD · older scan", chain: "ethereum", sourcePosts: [], status: "officially-confirmed", conditions: [], lastCheckedAt: "2026-10-02T00:00:00.000Z", confidence: 90, demo: false },
+    { id: "gtd-undated-new", name: "Unscheduled GTD · latest scan", chain: "ethereum", sourcePosts: [], status: "officially-confirmed", conditions: [], lastCheckedAt: "2026-10-03T00:00:00.000Z", confidence: 90, demo: false },
+  ];
+  payload.socialReviewQueue = [];
+  await page.route("**/api/dashboard**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Mint Scanner", exact: true }).click();
+  await expect(page.getByText("8 records · Table view", { exact: true })).toBeVisible();
+  const opportunityHeadings = page.locator("h3");
+  await expect(opportunityHeadings).toHaveText(["Earlier Mint", "Earlier GTD", "Later Mint", "Later GTD", "Unscheduled Mint · older scan", "Unscheduled GTD · older scan", "Unscheduled Mint · latest scan", "Unscheduled GTD · latest scan"]);
+  await page.getByLabel("Sort schedule and scan history").selectOption("desc");
+  await expect(opportunityHeadings).toHaveText(["Later Mint", "Later GTD", "Earlier Mint", "Earlier GTD", "Unscheduled Mint · latest scan", "Unscheduled GTD · latest scan", "Unscheduled Mint · older scan", "Unscheduled GTD · older scan"]);
+  await page.getByRole("button", { name: "Free Mint", exact: true }).click();
+  await expect(opportunityHeadings).toHaveText(["Later Mint", "Earlier Mint", "Unscheduled Mint · latest scan", "Unscheduled Mint · older scan"]);
+  await page.getByRole("button", { name: "GTD Mint", exact: true }).click();
+  await page.getByLabel("Sort schedule and scan history").selectOption("asc");
+  await expect(opportunityHeadings).toHaveText(["Earlier GTD", "Later GTD", "Unscheduled GTD · older scan", "Unscheduled GTD · latest scan"]);
+  await page.getByLabel("Sort schedule and scan history").selectOption("desc");
+  await expect(opportunityHeadings).toHaveText(["Later GTD", "Earlier GTD", "Unscheduled GTD · latest scan", "Unscheduled GTD · older scan"]);
 });

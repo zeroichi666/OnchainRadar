@@ -16,6 +16,12 @@ type StoredTable =
 
 type IngestionBatch = { table: StoredTable; rows: Record<string, unknown>[] };
 
+export type ScanHistoryClearResult = {
+  records: Record<StoredTable, number>;
+  syncState: number;
+  ingestionEvents: number;
+};
+
 const allowedTables = new Set<StoredTable>([
   "radar_candidates",
   "radar_nfts",
@@ -229,6 +235,24 @@ export function commitSqliteIngestionIfNew(input: {
     return true;
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* Preserve the original write error. */ }
+    throw error;
+  }
+}
+
+export function clearSqliteScanHistory(): ScanHistoryClearResult {
+  const db = getSqliteDatabase();
+  const records = Object.fromEntries([...allowedTables].map((table) => [table, 0])) as Record<StoredTable, number>;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const grouped = db.prepare("SELECT table_name, COUNT(*) AS count FROM radar_records GROUP BY table_name").all() as { table_name: StoredTable; count: number }[];
+    for (const row of grouped) records[row.table_name] = Number(row.count);
+    const syncState = Number((db.prepare("SELECT COUNT(*) AS count FROM radar_sync_state").get() as { count: number }).count);
+    const ingestionEvents = Number((db.prepare("SELECT COUNT(*) AS count FROM radar_ingestion_events").get() as { count: number }).count);
+    db.exec("DELETE FROM radar_records; DELETE FROM radar_sync_state; DELETE FROM radar_ingestion_events;");
+    db.exec("COMMIT");
+    return { records, syncState, ingestionEvents };
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* Preserve the original clear error. */ }
     throw error;
   }
 }

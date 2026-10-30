@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 import { IngestionEnvelopeSchema } from "@/lib/server/ingest-schema";
-import { getStorageStatus, persistIngestion, readCandidatesByChainAddresses, readLastSuccessfulSync, readPayloadRowsByIds, readPayloadTable, readSecurityReports } from "@/lib/server/supabase";
-import { closeSqliteDatabase, commitSqliteIngestionIfNew, isSqliteIngestionEventRecorded, upsertSqliteRecord, writeSqliteSyncState } from "@/lib/server/sqlite-storage";
+import { clearScanHistory, getStorageStatus, persistIngestion, readCandidatesByChainAddresses, readLastSuccessfulSync, readPayloadRowsByIds, readPayloadTable, readSecurityReports } from "@/lib/server/supabase";
+import { closeSqliteDatabase, commitSqliteIngestionIfNew, getSqliteDatabase, isSqliteIngestionEventRecorded, upsertSqliteRecord, writeSqliteSyncState } from "@/lib/server/sqlite-storage";
 
 const syncedAt = "2026-10-30T00:00:00.000Z";
 
@@ -81,5 +81,24 @@ describe("local SQLite storage", () => {
 
     expect(isSqliteIngestionEventRecorded("sqlite-event-rollback")).toBe(false);
     await expect(readPayloadTable("radar_nfts", 10)).resolves.toEqual([]);
+  });
+
+  it("clears every scan table and operational marker in one active-provider operation", async () => {
+    const tables = ["radar_candidates", "radar_nfts", "radar_gtd", "radar_narratives", "radar_social_posts", "radar_cto_evidence", "radar_security_reports"] as const;
+    for (const table of tables) upsertSqliteRecord(table, { id: `row-${table}`, updated_at: syncedAt, payload: { id: `row-${table}` } });
+    writeSqliteSyncState("agent-reach", syncedAt, { eventId: "old-event" });
+    writeSqliteSyncState("security:base", syncedAt, { checked: 1 });
+    commitSqliteIngestionIfNew({ eventId: "old-event", source: "agent-reach", ingestedAt: syncedAt, syncedAt, syncDetails: {}, batches: [] });
+
+    const result = await clearScanHistory();
+
+    expect(result.records).toEqual(Object.fromEntries(tables.map((table) => [table, 1])));
+    expect(result.syncState).toBe(2);
+    expect(result.ingestionEvents).toBe(1);
+    const remaining = getSqliteDatabase().prepare("SELECT COUNT(*) AS count FROM radar_records").get() as { count: number };
+    expect(Number(remaining.count)).toBe(0);
+    expect(isSqliteIngestionEventRecorded("old-event")).toBe(false);
+    await expect(readLastSuccessfulSync("agent-reach")).resolves.toBeNull();
+    await expect(readPayloadTable("radar_candidates", 10)).resolves.toEqual([]);
   });
 });
