@@ -21,7 +21,7 @@ Read routes return JSON and use HTTP 400 for invalid filters, 404 for unknown/no
 
 The dashboard date-filter response exposes `X-Social-Date` and `X-Social-Time-Zone` headers. This is a read-time view only: historical posts remain stored, and the normal dashboard UI can switch between a chosen WIB date and all history. Live worker searches default to today's WIB date and enforce exact post timestamps after X's date-only source query filtering.
 
-With `DATA_MODE=live`, `STORAGE_PROVIDER` selects persistence: `supabase` is the default; `sqlite` uses `SQLITE_DATABASE_PATH` (default `.data/onchain-radar.sqlite`). SQLite is intended for local or self-hosted persistent disks, not ephemeral serverless storage. The health endpoint reports the active backend and SQLite creates its file automatically.
+With `DATA_MODE=live`, `STORAGE_PROVIDER` selects persistence: `supabase` is the default; `sqlite` uses `SQLITE_DATABASE_PATH` (default `.data/onchain-radar.sqlite`). SQLite is intended for local or self-hosted persistent disks, not ephemeral serverless storage. The health endpoint reports the active backend and SQLite creates its file automatically. For file-backed SQLite, the app checks on database use for a verified daily snapshot under `<SQLITE_DATABASE_PATH>.backups` and retains the seven newest files; clearing scan history first takes a fresh snapshot. See the README for manual recovery instructions.
 
 ## Protected ingestion
 

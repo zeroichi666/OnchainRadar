@@ -1,10 +1,24 @@
+import { copyFileSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 import { IngestionEnvelopeSchema } from "@/lib/server/ingest-schema";
 import { clearScanHistory, getStorageStatus, persistIngestion, readCandidatesByChainAddresses, readLastSuccessfulSync, readPayloadRowsByIds, readPayloadTable, readSecurityReports } from "@/lib/server/supabase";
-import { closeSqliteDatabase, commitSqliteIngestionIfNew, getSqliteDatabase, isSqliteIngestionEventRecorded, upsertSqliteRecord, writeSqliteSyncState } from "@/lib/server/sqlite-storage";
+import { closeSqliteDatabase, commitSqliteIngestionIfNew, createSqliteBackup, getSqliteDatabase, isSqliteIngestionEventRecorded, upsertSqliteRecord, writeSqliteSyncState } from "@/lib/server/sqlite-storage";
 
 const syncedAt = "2026-10-30T00:00:00.000Z";
+const temporaryDirectories: string[] = [];
+
+function createDatabasePath(): string {
+  const directory = mkdtempSync(join(tmpdir(), "onchain-radar-sqlite-test-"));
+  temporaryDirectories.push(directory);
+  return join(directory, "history.sqlite");
+}
+
+function listBackups(databasePath: string): string[] {
+  return readdirSync(`${databasePath}.backups`).filter((name) => name.endsWith(".sqlite"));
+}
 
 describe("local SQLite storage", () => {
   beforeEach(() => {
@@ -14,6 +28,8 @@ describe("local SQLite storage", () => {
   });
   afterEach(() => {
     closeSqliteDatabase();
+    vi.useRealTimers();
+    for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
     vi.unstubAllEnvs();
   });
 
@@ -100,5 +116,74 @@ describe("local SQLite storage", () => {
     expect(isSqliteIngestionEventRecorded("old-event")).toBe(false);
     await expect(readLastSuccessfulSync("agent-reach")).resolves.toBeNull();
     await expect(readPayloadTable("radar_candidates", 10)).resolves.toEqual([]);
+  });
+
+  it("automatically creates a verified backup and restores stored data from it", async () => {
+    const databasePath = createDatabasePath();
+    vi.stubEnv("SQLITE_DATABASE_PATH", databasePath);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-30T00:00:00.000Z"));
+    const original = {
+      id: "restore-candidate",
+      updated_at: syncedAt,
+      payload: { id: "restore-candidate", state: "before" },
+    };
+    upsertSqliteRecord("radar_candidates", original);
+
+    vi.setSystemTime(new Date("2026-10-30T00:01:01.000Z"));
+    getSqliteDatabase();
+    const backups = listBackups(databasePath);
+    expect(backups).toHaveLength(1);
+    const backupPath = join(`${databasePath}.backups`, backups[0]);
+
+    upsertSqliteRecord("radar_candidates", {
+      ...original,
+      updated_at: "2026-10-30T00:02:00.000Z",
+      payload: { id: "restore-candidate", state: "after" },
+    });
+    closeSqliteDatabase();
+
+    // Mirror the documented restore flow: stop/close SQLite, replace the file, then remove stale WAL sidecars.
+    copyFileSync(backupPath, databasePath);
+    rmSync(`${databasePath}-wal`, { force: true });
+    rmSync(`${databasePath}-shm`, { force: true });
+
+    await expect(readPayloadRowsByIds("radar_candidates", [original.id])).resolves.toEqual([
+      { id: original.id, payload: original.payload },
+    ]);
+  });
+
+  it("backs up scan history immediately before clearing it", async () => {
+    const databasePath = createDatabasePath();
+    vi.stubEnv("SQLITE_DATABASE_PATH", databasePath);
+    const candidate = { id: "before-clear", updated_at: syncedAt, payload: { id: "before-clear", state: "saved" } };
+    upsertSqliteRecord("radar_candidates", candidate);
+
+    const result = await clearScanHistory();
+
+    expect(result.records.radar_candidates).toBe(1);
+    const backups = listBackups(databasePath);
+    expect(backups).toHaveLength(1);
+    closeSqliteDatabase();
+    copyFileSync(join(`${databasePath}.backups`, backups[0]), databasePath);
+    rmSync(`${databasePath}-wal`, { force: true });
+    rmSync(`${databasePath}-shm`, { force: true });
+    await expect(readPayloadTable("radar_candidates", 10)).resolves.toEqual([{ payload: candidate.payload }]);
+  });
+
+  it("retains only the seven newest SQLite backups", () => {
+    const databasePath = createDatabasePath();
+    vi.stubEnv("SQLITE_DATABASE_PATH", databasePath);
+    upsertSqliteRecord("radar_candidates", { id: "rotation-test", payload: { id: "rotation-test" } });
+    const db = getSqliteDatabase();
+
+    for (let day = 1; day <= 8; day += 1) {
+      createSqliteBackup(db, databasePath, new Date(`2026-10-${String(day).padStart(2, "0")}T00:00:00.000Z`));
+    }
+
+    const backups = listBackups(databasePath);
+    expect(backups).toHaveLength(7);
+    expect(backups.some((name) => name.includes("2026-10-01T00-00-00-000Z"))).toBe(false);
+    expect(backups.some((name) => name.includes("2026-10-08T00-00-00-000Z"))).toBe(true);
   });
 });

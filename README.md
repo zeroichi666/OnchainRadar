@@ -75,9 +75,23 @@ INGESTION_SECRET=<secret-kuat-untuk-worker>
 SCAN_HISTORY_DELETE_SECRET=<secret-admin-acak-minimal-32-byte>
 ```
 
-Tidak perlu mengisi `SUPABASE_URL` atau `SUPABASE_SERVICE_ROLE_KEY` dalam mode ini. File database dibuat otomatis; path relatif dihitung dari root proyek. Direktori `.data/` (termasuk file WAL SQLite) dikecualikan dari Git. Ingestion tetap memerlukan `INGESTION_SECRET` dan Bearer authorization seperti mode Supabase. `STORAGE_PROVIDER` yang tidak diisi tetap memilih Supabase demi kompatibilitas.
+Tidak perlu mengisi `SUPABASE_URL` atau `SUPABASE_SERVICE_ROLE_KEY` dalam mode ini. File database dibuat otomatis; path relatif dihitung dari root proyek. Direktori `.data/` (termasuk file WAL SQLite dan backup) dikecualikan dari Git. Ingestion tetap memerlukan `INGESTION_SECRET` dan Bearer authorization seperti mode Supabase. `STORAGE_PROVIDER` yang tidak diisi tetap memilih Supabase demi kompatibilitas.
 
-SQLite lokal ditujukan untuk satu aplikasi pada mesin lokal atau host mandiri dengan disk persisten. Jangan gunakan file lokal ini sebagai storage produksi pada Netlify/serverless atau beberapa instance, karena filesystem fungsi dapat bersifat sementara dan tidak dibagi antar-instance. Gunakan Supabase untuk deployment seperti itu. Simpan cadangan file database secara terpisah.
+SQLite lokal ditujukan untuk satu aplikasi pada mesin lokal atau host mandiri dengan disk persisten. Jangan gunakan file lokal ini sebagai storage produksi pada Netlify/serverless atau beberapa instance, karena filesystem fungsi dapat bersifat sementara dan tidak dibagi antar-instance. Gunakan Supabase untuk deployment seperti itu.
+
+Untuk database SQLite berbasis file, aplikasi membuat snapshot otomatis saat database digunakan bila backup terakhir lebih tua dari 24 jam. Snapshot dibuat dengan salinan konsisten, dicek menggunakan `PRAGMA integrity_check`, lalu disimpan di `<SQLITE_DATABASE_PATH>.backups`; tujuh file terbaru dipertahankan. Backup tidak dibuat untuk `:memory:`. Penghapusan seluruh riwayat scan juga membuat backup baru tepat sebelum penghapusan; jika backup itu gagal, penghapusan dibatalkan.
+
+**Pemulihan manual:** hentikan aplikasi/worker yang memakai file database, pilih snapshot yang ingin dipulihkan, lalu salin ke lokasi database. Simpan file saat ini terlebih dahulu dan hapus sidecar WAL lama sebelum aplikasi dijalankan lagi:
+
+```bash
+DB=.data/onchain-radar.sqlite
+BACKUP=".data/onchain-radar.sqlite.backups/onchain-radar-<timestamp>-<id>.sqlite"
+cp -p "$DB" "$DB.before-restore-$(date +%Y%m%d%H%M%S)"
+cp -p "$BACKUP" "$DB"
+rm -f "$DB-wal" "$DB-shm"
+```
+
+Ganti `BACKUP` dengan nama file snapshot yang dipilih. Jalankan kembali aplikasi setelah penyalinan selesai; pemulihan tidak dilakukan otomatis agar operator memilih sendiri titik waktu yang benar.
 
 ### Supabase live mode
 

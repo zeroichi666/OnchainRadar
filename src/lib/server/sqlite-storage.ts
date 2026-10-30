@@ -1,7 +1,8 @@
 import "server-only";
-import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
@@ -33,8 +34,13 @@ const allowedTables = new Set<StoredTable>([
 ]);
 
 const requireFromProject = createRequire(resolve(process.cwd(), "package.json"));
+const SQLITE_BACKUP_RETENTION = 7;
+const SQLITE_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const SQLITE_BACKUP_RECHECK_MS = 60 * 60 * 1000;
+const SQLITE_BACKUP_EMPTY_RECHECK_MS = 60 * 1000;
 let database: SqliteDatabase | null = null;
 let openedPath: string | null = null;
+let nextSqliteBackupCheckAt = 0;
 
 export function getSqliteDatabasePath(): string {
   const configured = process.env.SQLITE_DATABASE_PATH?.trim() || ".data/onchain-radar.sqlite";
@@ -52,10 +58,121 @@ function getDatabaseConstructor(): typeof import("node:sqlite").DatabaseSync {
   }
 }
 
+function sqliteBackupDirectory(databasePath: string): string {
+  return `${databasePath}.backups`;
+}
+
+function listSqliteBackups(databasePath: string): string[] {
+  const directory = sqliteBackupDirectory(databasePath);
+  try {
+    return readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.startsWith("onchain-radar-") && entry.name.endsWith(".sqlite"))
+      .map((entry) => entry.name)
+      .sort((left, right) => (left < right ? 1 : left > right ? -1 : 0));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function latestSqliteBackupTime(databasePath: string): number | null {
+  const directory = sqliteBackupDirectory(databasePath);
+  const backups = listSqliteBackups(databasePath);
+  if (!backups.length) return null;
+  let latest = 0;
+  for (const name of backups) {
+    try {
+      latest = Math.max(latest, statSync(join(directory, name)).mtimeMs);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return latest || null;
+}
+
+function rotateSqliteBackups(databasePath: string): void {
+  const directory = sqliteBackupDirectory(databasePath);
+  for (const name of listSqliteBackups(databasePath).slice(SQLITE_BACKUP_RETENTION)) {
+    try {
+      rmSync(join(directory, name));
+    } catch (error) {
+      console.warn("Could not remove an expired SQLite backup.", error);
+    }
+  }
+}
+
+export function createSqliteBackup(
+  db: SqliteDatabase = getSqliteDatabase(),
+  databasePath: string = getSqliteDatabasePath(),
+  createdAt: Date = new Date(),
+): string | null {
+  if (databasePath === ":memory:") return null;
+
+  const directory = sqliteBackupDirectory(databasePath);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const timestamp = createdAt.toISOString().replace(/[:.]/g, "-");
+  const backupPath = join(directory, `onchain-radar-${timestamp}-${randomUUID()}.sqlite`);
+  const temporaryPath = `${backupPath}.tmp`;
+  try {
+    db.prepare("VACUUM INTO ?").run(temporaryPath);
+    chmodSync(temporaryPath, 0o600);
+
+    const verificationDatabase = new (getDatabaseConstructor())(temporaryPath);
+    let integrity: string | undefined;
+    try {
+      integrity = (verificationDatabase.prepare("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check;
+    } finally {
+      verificationDatabase.close();
+    }
+    if (integrity !== "ok") throw new Error(`SQLite backup integrity check failed: ${integrity ?? "no result"}.`);
+
+    renameSync(temporaryPath, backupPath);
+    try {
+      rotateSqliteBackups(databasePath);
+    } catch (error) {
+      console.warn("Could not rotate older SQLite backups.", error);
+    }
+    return backupPath;
+  } catch (error) {
+    try { rmSync(temporaryPath, { force: true }); } catch { /* Preserve the original backup error. */ }
+    throw error;
+  }
+}
+
+function maybeCreatePeriodicSqliteBackup(db: SqliteDatabase, databasePath: string): void {
+  if (databasePath === ":memory:") return;
+  const now = Date.now();
+  if (now < nextSqliteBackupCheckAt) return;
+  nextSqliteBackupCheckAt = now + SQLITE_BACKUP_RECHECK_MS;
+
+  try {
+    const latestBackup = latestSqliteBackupTime(databasePath);
+    if (latestBackup !== null && now - latestBackup < SQLITE_BACKUP_INTERVAL_MS) return;
+
+    const storedData = db.prepare(`
+      SELECT EXISTS (SELECT 1 FROM radar_records)
+        OR EXISTS (SELECT 1 FROM radar_sync_state)
+        OR EXISTS (SELECT 1 FROM radar_ingestion_events) AS present
+    `).get() as { present: number };
+    if (!storedData.present) {
+      nextSqliteBackupCheckAt = now + SQLITE_BACKUP_EMPTY_RECHECK_MS;
+      return;
+    }
+
+    createSqliteBackup(db, databasePath, new Date(now));
+  } catch (error) {
+    console.warn("Automatic SQLite backup failed; the database remains available.", error);
+  }
+}
+
 export function getSqliteDatabase(): SqliteDatabase {
   const path = getSqliteDatabasePath();
-  if (database && openedPath === path) return database;
+  if (database && openedPath === path) {
+    maybeCreatePeriodicSqliteBackup(database, path);
+    return database;
+  }
   if (database) database.close();
+  nextSqliteBackupCheckAt = 0;
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
 
   const DatabaseSync = getDatabaseConstructor();
@@ -88,6 +205,7 @@ export function getSqliteDatabase(): SqliteDatabase {
       ingested_at TEXT NOT NULL
     );
   `);
+  maybeCreatePeriodicSqliteBackup(database, path);
   return database;
 }
 
@@ -95,6 +213,7 @@ export function closeSqliteDatabase(): void {
   if (database) database.close();
   database = null;
   openedPath = null;
+  nextSqliteBackupCheckAt = 0;
 }
 
 function parseJson(value: string): unknown {
@@ -242,6 +361,12 @@ export function commitSqliteIngestionIfNew(input: {
 export function clearSqliteScanHistory(): ScanHistoryClearResult {
   const db = getSqliteDatabase();
   const records = Object.fromEntries([...allowedTables].map((table) => [table, 0])) as Record<StoredTable, number>;
+  const storedData = db.prepare(`
+    SELECT EXISTS (SELECT 1 FROM radar_records)
+      OR EXISTS (SELECT 1 FROM radar_sync_state)
+      OR EXISTS (SELECT 1 FROM radar_ingestion_events) AS present
+  `).get() as { present: number };
+  if (storedData.present) createSqliteBackup(db, getSqliteDatabasePath());
   db.exec("BEGIN IMMEDIATE");
   try {
     const grouped = db.prepare("SELECT table_name, COUNT(*) AS count FROM radar_records GROUP BY table_name").all() as { table_name: StoredTable; count: number }[];
